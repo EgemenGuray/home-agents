@@ -1,0 +1,6 @@
+{
+  "config": {
+    "step": {"user": {"title": "Home Agent", "data": {"url": "Agent service URL (tailnet)", "token": "Service token"}}},
+    "error": {"cannot_connect": "Cannot reach the agent service"}
+  }
+}

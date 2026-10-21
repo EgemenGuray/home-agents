@@ -1,0 +1,11 @@
+# Paths an agent's pull request may never change (S1.9.1). Only the owner edits these.
+src/home_agents/policy.py
+src/home_agents/guardrails.py
+src/home_agents/approvals.py
+src/home_agents/broker.py
+src/home_agents/egress.py
+src/home_agents/gmail_guard.py
+config/
+deploy/
+.github/
+PROTECTED_PATHS

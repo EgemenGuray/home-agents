@@ -1,0 +1,35 @@
+# Phase 1 on the hub Mac: the agent service and NATS. Ports bind to localhost only; the app and HA
+# reach the service through `tailscale serve`. Phase 2 moves this file to the Mac Studio
+# unchanged (S2.2.1); the vault, broker and egress routes stay on the hub Mac.
+name: home-agents
+
+services:
+  agent:
+    image: home-agents/service:${RELEASE:-latest}
+    build: ../..
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - agent-data:/data
+      - ./policy.yaml:/app/config/policy.yaml:ro
+      - ./keys:/app/config/keys:ro          # phone PUBLIC keys only
+    ports:
+      - "127.0.0.1:8700:8700"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8700/healthz')"]
+      interval: 30s
+      retries: 3
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+    ports:
+      - "127.0.0.1:4222:4222"
+    mem_limit: 128m
+
+volumes:
+  agent-data:

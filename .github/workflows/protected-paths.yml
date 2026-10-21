@@ -1,0 +1,23 @@
+name: protected-paths
+# A pull request opened by the coding agent (branch agent/*) fails if it touches a protected path.
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    if: startsWith(github.head_ref, 'agent/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compare against PROTECTED_PATHS on the base branch
+        run: |
+          git show "origin/${{ github.base_ref }}:PROTECTED_PATHS" | grep -v '^#' | sed '/^$/d' > /tmp/protected
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > /tmp/changed
+          bad=0
+          while read -r p; do
+            if grep -q "^${p}" /tmp/changed; then echo "::error::agent PR changes protected path $p"; bad=1; fi
+          done < /tmp/protected
+          exit $bad

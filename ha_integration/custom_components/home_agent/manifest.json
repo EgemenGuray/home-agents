@@ -1,0 +1,11 @@
+{
+  "domain": "home_agent",
+  "name": "Home Agent",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://github.com/EgemenGuray/home-agents",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}

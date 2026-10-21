@@ -1,0 +1,11 @@
+# Protected paths need the owner's review (S1.9.1).
+/src/home_agents/policy.py      @EgemenGuray
+/src/home_agents/guardrails.py  @EgemenGuray
+/src/home_agents/approvals.py   @EgemenGuray
+/src/home_agents/broker.py      @EgemenGuray
+/src/home_agents/egress.py      @EgemenGuray
+/src/home_agents/gmail_guard.py @EgemenGuray
+/config/                        @EgemenGuray
+/deploy/                        @EgemenGuray
+/.github/                       @EgemenGuray
+/PROTECTED_PATHS                @EgemenGuray

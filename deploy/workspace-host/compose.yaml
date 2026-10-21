@@ -1,0 +1,36 @@
+# Phase 1 workspace host: a rented Linux VM (16 to 32 GB) joined to the tailnet (S1.4.1).
+# Workspaces live on an internal network with no internet. The egress gateway is the only
+# container that can leave, and it forwards each route port to that route's proxy on the hub Mac
+# over Tailscale, so a dropped route or tunnel fails closed (S1.3.4).
+name: workspace-host
+
+services:
+  egress-gateway:
+    image: alpine:3.20
+    restart: unless-stopped
+    networks: [ws-internal, uplink]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache socat >/dev/null
+        socat TCP-LISTEN:18080,fork,reuseaddr TCP:$${HUB_TAILNET_HOST}:8888 &
+        socat TCP-LISTEN:18081,fork,reuseaddr TCP:$${HUB_TAILNET_HOST}:8889 &
+        socat TCP-LISTEN:18082,fork,reuseaddr TCP:$${HUB_TAILNET_HOST}:8890 &
+        wait
+    environment:
+      HUB_TAILNET_HOST: ${HUB_TAILNET_HOST:?set in .env}
+
+  langfuse:
+    # Traces per request (S1.8.1); reachable only on the tailnet via tailscale serve on the VM.
+    image: langfuse/langfuse:2
+    restart: unless-stopped
+    env_file: langfuse.env
+    networks: [uplink]
+    ports:
+      - "127.0.0.1:3000:3000"
+
+networks:
+  ws-internal:
+    name: ws-internal
+    internal: true
+  uplink:
