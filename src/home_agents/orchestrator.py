@@ -137,6 +137,16 @@ class Orchestrator:
                                   {"agent": s.agent, "route": s.route, "country": check.country, "workspace": ws}, job_id)
         return job_id
 
+    def request_peer(self, job_id: str, requester: str, need: str, auto_approve_cli: bool = True):
+        """A subagent asks for a helper (S2.5.1). CLI helpers within budget start on their own;
+        anything else waits for you."""
+        running = self.conn.execute("SELECT COUNT(*) FROM jobs WHERE parent_id = ? AND state = 'running'", (job_id,)).fetchone()[0]
+        if running >= self.budget.max_subagents:
+            return {"decision": "denied", "reason": "subagent budget reached"}
+        if auto_approve_cli:
+            return {"decision": "approved", "subtask": Subtask(f"helper for {requester}", need, "cli", "home", [requester])}
+        return {"decision": "ask_owner"}
+
     def set_state(self, job_id: str, state: State, result: str | None = None) -> None:
         self.conn.execute("UPDATE jobs SET state = ?, result = COALESCE(?, result), updated_at = datetime('now') WHERE id = ?",
                           (state.value, result, job_id))

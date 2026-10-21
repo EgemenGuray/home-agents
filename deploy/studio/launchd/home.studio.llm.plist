@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- S2.3.1: local model server on the Studio (MLX, Metal). Listens on localhost only; the agent
+     container reaches it as host.docker.internal. Pick the model after the S2.3.1 benchmark. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>home.studio.llm</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/libexec/home-studio/venv/bin/mlx_lm.server</string>
+    <string>--model</string><string>/Users/Shared/models/current</string>
+    <string>--host</string><string>127.0.0.1</string>
+    <string>--port</string><string>8080</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/home.studio.llm.log</string>
+  <key>StandardErrorPath</key><string>/tmp/home.studio.llm.log</string>
+</dict>
+</plist>

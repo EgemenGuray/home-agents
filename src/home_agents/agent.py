@@ -13,7 +13,7 @@ import anthropic
 
 from .audit import AuditLog
 from .memory import Memory
-from .models import OPUS, SONNET, Purpose, Spend, choose_model
+from .models import LOCAL, OPUS, SONNET, Purpose, Spend, choose_model
 from .tools import ToolRegistry, result_text
 
 SYSTEM_PROMPT = """You are the voice of our home and its one assistant. You control the house through \
@@ -48,8 +48,9 @@ class Reply:
 
 class Agent:
     def __init__(self, client: anthropic.Anthropic, tools: ToolRegistry, memory: Memory, spend: Spend,
-                 audit: AuditLog, approvals=None, token_budget: int = 60000, max_iterations: int = 8):
+                 audit: AuditLog, approvals=None, token_budget: int = 60000, max_iterations: int = 8, local=None):
         self.client = client
+        self.local = local  # LocalModel on the Studio (Phase 2), or None
         self.tools = tools
         self.memory = memory
         self.spend = spend
@@ -69,10 +70,29 @@ class Agent:
     def converse(self, text: str, conversation_id: str | None = None, *, channel: str = "voice",
                  room: str | None = None, purpose: Purpose = Purpose.DEFAULT, job_id: str | None = None) -> Reply:
         conversation_id = conversation_id or f"conv-{uuid.uuid4().hex[:12]}"
-        route = choose_model(purpose, text)
+        local_ok = self.local is not None and self.local.available()
+        route = choose_model(purpose, text, local_available=local_ok)
+        if route.model == LOCAL:
+            return self._local(text, conversation_id, channel, room, route.reason)
         model = route.model if route.model in (SONNET, OPUS) else SONNET
         self.spend.check_before_call()
+        try:
+            return self._cloud(text, conversation_id, channel, room, model, job_id)
+        except (anthropic.APIConnectionError, anthropic.InternalServerError, anthropic.APITimeoutError):
+            if local_ok:  # S2.3.2: internet or API down, answer locally
+                return self._local(text, conversation_id, channel, room, "cloud unavailable, local fallback", record_user=False)
+            raise
 
+    def _local(self, text, conversation_id, channel, room, reason, record_user=True) -> Reply:
+        history = self.memory.history(conversation_id)
+        if record_user:
+            self.memory.add_turn(conversation_id, "user", text, channel, room)
+        answer, tin, tout = self.local.answer(history, text, self.memory.facts_prompt())
+        self.memory.add_turn(conversation_id, "assistant", answer, channel, room)
+        self.audit.record("local_model", "agent", {"reason": reason})
+        return Reply(answer, conversation_id, LOCAL, tin, tout)
+
+    def _cloud(self, text, conversation_id, channel, room, model, job_id) -> Reply:
         messages = self.memory.history(conversation_id) + [{"role": "user", "content": text}]
         self.memory.add_turn(conversation_id, "user", text, channel, room)
         tools = self.tools.definitions() + [WEB_SEARCH]

@@ -1,0 +1,12 @@
+# LiveKit server for the voice server (S2.4.1). Keys are set by LIVEKIT_KEYS in .env
+# ("key: secret"), never here.
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+turn:
+  enabled: false
+logging:
+  level: info

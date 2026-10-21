@@ -1,0 +1,58 @@
+# Phase 2 on the Mac Studio (E2.2, E2.4): the agent runtime moves here from the hub Mac with the same
+# image; the voice server is added. All ports bind to localhost; tailscale serve publishes
+# what the app and devices need. The vault, broker and egress routes stay on the hub Mac.
+# The local model runs natively (Metal) under launchd, not in a container: launchd/.
+name: home-studio
+
+services:
+  agent:
+    image: home-agents/service:${RELEASE:-latest}
+    build: ../..
+    restart: always
+    env_file: .env
+    environment:
+      LOCAL_LLM_URL: http://host.docker.internal:8080
+    volumes:
+      - agent-data:/data
+      - ../hub/policy.yaml:/app/config/policy.yaml:ro
+      - ../hub/keys:/app/config/keys:ro
+    ports: ["127.0.0.1:8700:8700"]
+
+  nats:
+    image: nats:2.10-alpine
+    restart: always
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes: ["../hub/nats.conf:/etc/nats/nats.conf:ro"]
+    ports: ["127.0.0.1:4222:4222"]
+
+  livekit:
+    # WebRTC audio from the Show devices and the app (S2.4.1). TURN is off: everything is on
+    # the LAN or the tailnet, so no public ports are needed.
+    image: livekit/livekit-server:v1.8
+    restart: always
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes: ["./livekit.yaml:/etc/livekit.yaml:ro"]
+    env_file: .env
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+
+  stt:
+    # Local speech-to-text; HA Assist on the hub Mac can also use it as its STT (Wyoming).
+    image: rhasspy/wyoming-whisper:2.4.0
+    restart: always
+    command: ["--model", "large-v3-turbo", "--language", "en", "--beam-size", "1"]
+    volumes: ["stt-data:/data"]
+    ports: ["127.0.0.1:10300:10300"]
+
+  tts:
+    image: rhasspy/wyoming-piper:1.5.4
+    restart: always
+    command: ["--voice", "en_GB-alba-medium"]
+    volumes: ["tts-data:/data"]
+    ports: ["127.0.0.1:10200:10200"]
+
+volumes:
+  agent-data:
+  stt-data:
+  tts-data:
