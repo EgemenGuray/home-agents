@@ -1,0 +1,50 @@
+# Default gitleaks rules plus home-specific checks.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_\-]{20,}'''
+tags = ["key", "anthropic"]
+
+[[rules]]
+id = "tailscale-auth-key"
+description = "Tailscale auth or API key"
+regex = '''tskey-[A-Za-z0-9\-]{10,}'''
+tags = ["key", "tailscale"]
+
+[[rules]]
+id = "home-assistant-long-lived-token"
+description = "Home Assistant long-lived access token (JWT)"
+regex = '''eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}'''
+tags = ["token", "home-assistant"]
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram bot token"
+regex = '''\b[0-9]{8,10}:[A-Za-z0-9_\-]{35}\b'''
+tags = ["token", "telegram"]
+
+[[rules]]
+id = "wireguard-private-key"
+description = "WireGuard / NordLynx private key"
+regex = '''(?i)(private[_ ]?key|wireguard_private_key)\s*[:=]\s*["']?[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=["']?'''
+tags = ["key", "wireguard"]
+
+[[rules]]
+id = "public-ipv4"
+description = "A literal public IPv4 address (home IP must never be committed)"
+regex = '''\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b'''
+tags = ["network"]
+  [rules.allowlist]
+  regexes = [
+    '''^(?:10|127)\.''',
+    '''^192\.168\.''',
+    '''^172\.(?:1[6-9]|2\d|3[01])\.''',
+    '''^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.''',
+    '''^0\.0\.0\.0$''',
+    '''^(?:192\.0\.2|198\.51\.100|203\.0\.113)\.''',
+    '''^1\.1\.1\.1$''',
+    '''^9\.9\.9\.9$''',
+  ]

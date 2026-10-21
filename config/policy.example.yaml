@@ -1,0 +1,16 @@
+# Copy to config/policy.yaml on the server. Changing the real file needs your approval (S1.9.1).
+messaging:
+  # Pairs that may message each other, in both directions. "human" is you, from the app.
+  allow:
+    - [orchestrator, "*"]
+    - [human, "*"]
+    - [researcher, writer]
+money:
+  currency: CAD
+  per_purchase_cap: 150
+  monthly_cap: 400
+  blocked_categories: [gift_card, crypto, money_transfer, account_security]
+routes:
+  home: {country: CA}
+  nord-us-ny: {country: US}
+  nord-de: {country: DE}
