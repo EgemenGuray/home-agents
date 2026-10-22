@@ -19,6 +19,8 @@ def _env(name: str, default: str | None = None) -> str | None:
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(_env("HOME_AGENTS_DATA", "./data")))
     policy_file: Path = field(default_factory=lambda: Path(_env("HOME_AGENTS_POLICY", "config/policy.yaml")))
+    # Harness (E1.12): providers, model chains, profiles, MCP servers, hooks. No secrets in it, only env var names.
+    harness_file: Path = field(default_factory=lambda: Path(_env("HOME_AGENTS_HARNESS", "config/harness.yaml")))
     # Home Assistant, reached over the LAN or tailnet with a scoped, non-admin user's token.
     ha_url: str | None = field(default_factory=lambda: _env("HA_URL"))
     ha_token: str | None = field(default_factory=lambda: _env("HA_TOKEN"))

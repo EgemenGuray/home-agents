@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home agents</title>
+<style>
+  :root { --bg:#f7f7f5; --panel:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e4e3de; --accent:#2f6fde; --ok:#2e8b57; --warn:#c77700; --bad:#c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --panel:#1f1f1d; --ink:#ecebe6; --muted:#9a9993; --line:#33332f; --accent:#6c9cf0; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; gap:4px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header b { margin-right:12px; }
+  nav button, .btn { border:1px solid var(--line); background:transparent; color:var(--ink); padding:6px 12px; border-radius:8px; cursor:pointer; font:inherit; }
+  nav button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  main { max-width:980px; margin:0 auto; padding:16px; }
+  section { display:none; } section.on { display:block; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:10px 0; }
+  .muted { color:var(--muted); font-size:13px; }
+  textarea, input, select { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px; }
+  textarea { width:100%; min-height:70px; }
+  #log { min-height:300px; }
+  .msg { padding:8px 12px; border-radius:10px; margin:6px 0; white-space:pre-wrap; max-width:85%; }
+  .msg.user { background:var(--accent); color:#fff; margin-left:auto; }
+  .msg.assistant { background:var(--panel); border:1px solid var(--line); }
+  .pill { font-size:12px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); }
+  .s-done { color:var(--ok); } .s-failed, .s-cancelled { color:var(--bad); } .s-waiting_approval { color:var(--warn); }
+  .ev { font-size:13px; border-left:2px solid var(--line); padding:2px 8px; margin:4px 0; white-space:pre-wrap; }
+  table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:6px; border-bottom:1px solid var(--line); font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <b>Home agents</b>
+  <nav class="row" id="nav">
+    <button data-tab="chat" class="on">Chat</button><button data-tab="tasks">Tasks</button><button data-tab="projects">Projects</button>
+    <button data-tab="memory">Memory</button><button data-tab="approvals">Approvals</button><button data-tab="settings">Models &amp; skills</button>
+  </nav>
+  <span style="flex:1"></span><span class="muted" id="spend"></span>
+</header>
+<main>
+  <div class="card" id="login" hidden>
+    <p>Paste the service token. It stays in this browser tab only.</p>
+    <div class="row"><input id="token" type="password" size="40"><button class="btn primary" id="save">Connect</button></div>
+  </div>
+
+  <section id="chat" class="on">
+    <div class="row">
+      <select id="session"><option value="">New chat</option></select>
+      <select id="profile"></select>
+      <select id="project"><option value="">No project</option></select>
+      <label class="row muted"><input type="checkbox" id="private"> Private (local models only)</label>
+    </div>
+    <div class="card" id="log"></div>
+    <textarea id="input" placeholder="Ask anything. Enter sends, Shift+Enter for a new line."></textarea>
+    <div class="row"><button class="btn primary" id="send">Send</button><span class="muted" id="chatstatus"></span></div>
+  </section>
+
+  <section id="tasks">
+    <div class="card">
+      <textarea id="taskprompt" placeholder="Describe a task to run in the background, like Dispatch."></textarea>
+      <div class="row"><select id="taskprofile"></select><select id="taskproject"><option value="">No project</option></select>
+        <label class="row muted"><input type="checkbox" id="taskprivate"> Private</label>
+        <input type="file" id="taskfiles" multiple><button class="btn primary" id="starttask">Start task</button></div>
+    </div>
+    <div id="tasklist"></div>
+    <div class="card" id="taskdetail" hidden></div>
+  </section>
+
+  <section id="projects">
+    <div class="card"><div class="row"><input id="pname" placeholder="Project name"><select id="pprofile"></select></div>
+      <textarea id="pinstr" placeholder="Standing instructions for every chat and task in this project"></textarea>
+      <button class="btn primary" id="pcreate">Create project</button></div>
+    <div id="plist"></div>
+  </section>
+
+  <section id="memory"><div class="card"><div class="row"><input id="msubject" placeholder="Subject"><input id="mfact" placeholder="Fact" size="50"><button class="btn primary" id="madd">Remember</button></div></div><table id="mlist"></table></section>
+
+  <section id="approvals"><p class="muted">Approvals are decided on your phone with Face ID. This list is read-only.</p><div id="alist"></div></section>
+
+  <section id="settings"><div id="overview"></div><h3>Chat app pairing</h3><div id="pairing"></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let token = ""; try { token = sessionStorage.getItem("ha_token") || ""; } catch (e) {}
+let openTask = null, lastEvent = 0, timer = null;
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) } });
+  if (r.status === 401) { $("login").hidden = false; throw new Error("token"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const fill = (sel, items, first) => { sel.replaceChildren(...(first ? [first] : []), ...items.map(([v, t]) => { const o = el("option", null, t); o.value = v; return o; })); };
+
+$("save").onclick = () => { token = $("token").value.trim(); try { sessionStorage.setItem("ha_token", token); } catch (e) {} $("login").hidden = true; boot(); };
+$("nav").onclick = (e) => { const t = e.target.dataset.tab; if (!t) return;
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === t)); load(t); };
+
+async function boot() {
+  if (!token) { $("login").hidden = false; return; }
+  const o = await api("/v1/h/overview");
+  $("spend").textContent = o.spend_month_cad != null ? `CA$${o.spend_month_cad} this month` : "";
+  for (const s of [$("profile"), $("taskprofile"), $("pprofile")]) fill(s, o.profiles.map(p => [p, p]));
+  await loadProjects(); await loadSessions();
+}
+
+async function loadSessions() {
+  const s = await api("/v1/h/sessions"); const keep = $("session").value; const n = el("option", null, "New chat"); n.value = "";
+  fill($("session"), s.map(x => [x.id, x.title || x.id]), n); $("session").value = keep;
+}
+$("session").onchange = async () => { $("log").replaceChildren(); if (!$("session").value) return;
+  for (const m of await api(`/v1/h/sessions/${$("session").value}/messages`)) addMsg(m.role, m.content, m.model); };
+function addMsg(role, text, model) { const d = el("div", "msg " + role, text); if (model) d.title = model; $("log").append(d); d.scrollIntoView({ block: "end" }); }
+
+async function send() {
+  const text = $("input").value.trim(); if (!text) return; $("input").value = ""; addMsg("user", text);
+  $("chatstatus").textContent = "Thinking…";
+  try {
+    const r = await api("/v1/h/chat", { method: "POST", body: JSON.stringify({ text, session_id: $("session").value || null,
+      profile: $("profile").value, project_id: $("project").value || null, private: $("private").checked || null }) });
+    addMsg("assistant", r.text, r.models.at(-1));
+    $("chatstatus").textContent = (r.models.at(-1) || "") + (r.pending_approvals.length ? " · waiting for approval on your phone" : "");
+    if (!$("session").value) { await loadSessions(); $("session").value = r.session.id; }
+  } catch (e) { $("chatstatus").textContent = e.message; }
+}
+$("send").onclick = send;
+$("input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+
+const readFile = (f) => new Promise((ok) => { const r = new FileReader(); r.onload = () => ok({ name: f.name, media_type: f.type || "application/octet-stream", data: r.result.split(",")[1] }); r.readAsDataURL(f); });
+$("starttask").onclick = async () => {
+  const prompt = $("taskprompt").value.trim(); if (!prompt) return;
+  const attachments = await Promise.all([...$("taskfiles").files].map(readFile));
+  const t = await api("/v1/h/tasks", { method: "POST", body: JSON.stringify({ prompt, profile: $("taskprofile").value,
+    project_id: $("taskproject").value || null, private: $("taskprivate").checked, attachments }) });
+  $("taskprompt").value = ""; $("taskfiles").value = ""; await loadTasks(); showTask(t.id);
+};
+async function loadTasks() {
+  const list = await api("/v1/h/tasks"); $("tasklist").replaceChildren(...list.map(t => {
+    const c = el("div", "card row"); c.style.cursor = "pointer"; c.onclick = () => showTask(t.id);
+    c.append(el("span", "pill s-" + t.state, t.state.replace("_", " ")), el("span", null, t.title), el("span", "muted", `${t.profile} · ${t.source} · ${t.created_at}`)); return c; }));
+}
+async function showTask(id) {
+  openTask = id; lastEvent = 0; const t = await api(`/v1/h/tasks/${id}`); const d = $("taskdetail"); d.hidden = false;
+  const head = el("div", "row"); head.append(el("b", null, t.title), el("span", "pill s-" + t.state, t.state));
+  const steer = el("input"); steer.placeholder = "Steer this task…"; steer.size = 40;
+  const sb = el("button", "btn", "Send"); sb.onclick = async () => { if (steer.value) { await api(`/v1/h/tasks/${id}/steer`, { method: "POST", body: JSON.stringify({ text: steer.value }) }); steer.value = ""; } };
+  const cb = el("button", "btn", "Stop"); cb.onclick = () => api(`/v1/h/tasks/${id}/cancel`, { method: "POST" });
+  const ctl = el("div", "row"); ctl.append(steer, sb, cb);
+  const arts = el("div"); for (const a of t.artifacts) { const b = el("button", "btn", "⬇ " + a.name); b.onclick = () => download(a); arts.append(b); }
+  const evs = el("div"); evs.id = "events";
+  d.replaceChildren(head, ctl, arts, evs, ...(t.result ? [el("div", "card", t.result)] : []));
+  pollEvents(); clearInterval(timer); timer = setInterval(pollEvents, 2000);
+}
+async function pollEvents() {
+  if (!openTask) return; const evs = await api(`/v1/h/tasks/${openTask}/events?after=${lastEvent}`);
+  for (const e of evs) { lastEvent = e.id; const txt = e.kind === "model" ? `${e.data.model}: ${e.data.text || ""}${e.data.tools.length ? "\n→ " + e.data.tools.join(", ") : ""}`
+      : e.kind === "tool" ? `${e.data.name}${e.data.error ? " (error)" : ""}: ${e.data.result}` : `${e.kind} ${JSON.stringify(e.data)}`;
+    $("events")?.append(el("div", "ev", txt)); if (["done", "failed", "cancelled"].includes(e.kind)) { clearInterval(timer); loadTasks(); } }
+}
+async function download(a) {
+  const r = await fetch(`/v1/h/artifacts/${a.id}`, { headers: { "Authorization": "Bearer " + token } });
+  const url = URL.createObjectURL(await r.blob()); const l = el("a"); l.href = url; l.download = a.name; l.click(); URL.revokeObjectURL(url);
+}
+
+async function loadProjects() {
+  const ps = await api("/v1/h/projects"); const none = () => { const o = el("option", null, "No project"); o.value = ""; return o; };
+  fill($("project"), ps.map(p => [p.id, p.name]), none()); fill($("taskproject"), ps.map(p => [p.id, p.name]), none());
+  $("plist").replaceChildren(...ps.map(p => { const c = el("div", "card"); c.append(el("b", null, p.name), el("div", "muted", p.profile), el("div", null, p.instructions)); return c; }));
+}
+$("pcreate").onclick = async () => { if (!$("pname").value) return;
+  await api("/v1/h/projects", { method: "POST", body: JSON.stringify({ name: $("pname").value, instructions: $("pinstr").value, profile: $("pprofile").value }) });
+  $("pname").value = $("pinstr").value = ""; loadProjects(); };
+
+async function loadMemory() {
+  const facts = await api("/v1/memory"); $("mlist").replaceChildren(...facts.map(f => { const tr = el("tr"); const x = el("button", "btn", "Forget");
+    x.onclick = async () => { await api(`/v1/memory/${f.id}`, { method: "DELETE" }); loadMemory(); };
+    tr.append(el("td", null, f.subject), el("td", null, f.fact), el("td", "muted", f.source), el("td")); tr.lastChild.append(x); return tr; }));
+}
+$("madd").onclick = async () => { await api("/v1/memory", { method: "POST", body: JSON.stringify({ subject: $("msubject").value, fact: $("mfact").value }) }); $("mfact").value = ""; loadMemory(); };
+
+async function load(tab) {
+  if (tab === "tasks") loadTasks();
+  if (tab === "projects") loadProjects();
+  if (tab === "memory") loadMemory();
+  if (tab === "approvals") { const a = await api("/v1/approvals"); $("alist").replaceChildren(...(a.length ? a.map(r => el("div", "card", `${r.summary} · ${r.state}`)) : [el("p", "muted", "Nothing waiting.")])); }
+  if (tab === "settings") {
+    const o = await api("/v1/h/overview"); const t = el("table");
+    t.append(...o.providers.map(p => { const tr = el("tr"); tr.append(el("td", null, p.provider), el("td", "muted", p.location), el("td", p.available ? "s-done" : "s-failed", p.available ? "available" : "unavailable")); return tr; }));
+    const chains = el("div"); for (const [a, c] of Object.entries(o.chains)) chains.append(el("div", "ev", `${a}: ${c.join(" → ")}`));
+    const sk = el("div"); for (const s of await api("/v1/h/skills")) sk.append(el("div", "ev", `${s.name}: ${s.description}`));
+    $("overview").replaceChildren(el("h3", null, "Providers"), t, el("h3", null, "Model chains"), chains, el("h3", null, "Skills"), sk);
+    const pr = await api("/v1/h/pairing"); const box = el("div");
+    for (const [code, key] of Object.entries(pr.waiting)) { const b = el("button", "btn", `Allow ${key} (${code})`); b.onclick = async () => { await api(`/v1/h/pairing/${code}`, { method: "POST" }); load("settings"); }; box.append(b); }
+    box.append(el("div", "muted", "Allowed: " + (pr.allowed.join(", ") || "none"))); $("pairing").replaceChildren(box);
+  }
+}
+boot().catch(() => {});
+</script>
+</body>
+</html>

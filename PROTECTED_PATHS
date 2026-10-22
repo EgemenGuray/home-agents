@@ -5,6 +5,9 @@ src/home_agents/approvals.py
 src/home_agents/broker.py
 src/home_agents/egress.py
 src/home_agents/gmail_guard.py
+src/home_agents/harness/loop.py
+src/home_agents/harness/profiles.py
+src/home_agents/harness/router.py
 config/
 deploy/
 .github/

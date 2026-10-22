@@ -1,0 +1,10 @@
+# SearXNG for the harness. JSON output on, no public instance features. secret_key comes from the
+# SEARXNG_SECRET environment variable at start (set it in .env), never from this file.
+use_default_settings: true
+server:
+  limiter: false
+  image_proxy: false
+search:
+  formats: [html, json]
+general:
+  instance_name: home-search

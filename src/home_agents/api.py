@@ -44,7 +44,8 @@ class FactIn(BaseModel):
     fact: str
 
 
-def build_app(settings: Settings | None = None, client=None, approvals: Approvals | None = None) -> FastAPI:
+def build_app(settings: Settings | None = None, client=None, approvals: Approvals | None = None,
+              harness_config: dict | None = None, providers=None, start_workers: bool = True) -> FastAPI:
     settings = settings or Settings()
     conn = connect(settings.db_path)
     audit = AuditLog(conn)
@@ -58,8 +59,9 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
     broker = CredentialBroker(approvals, set(policy.get("agents_sites", [])), audit) if approvals else None
 
     tools = ToolRegistry(memory_tools(memory))
-    if settings.ha_url and settings.ha_token:
-        for t in HomeAssistant(settings.ha_url, settings.ha_token).tools():
+    ha = HomeAssistant(settings.ha_url, settings.ha_token) if settings.ha_url and settings.ha_token else None
+    if ha:
+        for t in ha.tools():
             tools.add(t)
     if client is None:  # pragma: no cover
         import anthropic
@@ -121,6 +123,28 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
     @app.get("/v1/audit", dependencies=[Depends(auth)])
     def search_audit(q: str = "", kind: str | None = None):
         return audit.search(q, kind)
+
+    # The harness (E1.12): any model, sessions, projects, tasks, skills, MCP, channels and the console.
+    if harness_config is None and Path(settings.harness_file).exists():
+        harness_config = yaml.safe_load(Path(settings.harness_file).read_text()) or {}
+    if harness_config is not None:
+        from .harness import build_harness
+        from .harness.api import mount
+        from .harness.channels import Pairing
+        from .harness.mcp_tools import load_mcp_tools
+
+        mcp = load_mcp_tools(harness_config.get("mcp", {})) if harness_config.get("mcp") else []
+        harness = build_harness(harness_config, conn=conn, data_dir=settings.data_dir, audit=audit, memory=memory,
+                                spend=spend, approvals=approvals, base_tools=tools, anthropic_client=client,
+                                providers=providers, extra_tools=mcp, start_workers=start_workers)
+        pairing = Pairing(set((harness_config.get("channels") or {}).get("allowed", [])))
+        mount(app, harness, auth, harness_config.get("hooks"), pairing)
+        if start_workers:
+            from .harness import daemon
+            notify = daemon.phone_notifier(ha, (harness_config.get("notify") or {}).get("service"))
+            app.state.harness_stop = daemon.start(harness, harness_config, pairing, notify)
+        app.state.harness = harness
+        app.state.pairing = pairing
 
     app.state.agent = agent
     app.state.approvals = approvals

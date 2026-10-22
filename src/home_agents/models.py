@@ -46,8 +46,9 @@ def choose_model(purpose: Purpose, text: str = "", *, cloud_up: bool = True, loc
     return Route(SONNET, "default")
 
 
-def cost_cad(model: str, input_tokens: int, output_tokens: int, usd_to_cad: float) -> float:
-    pin, pout = PRICES_USD.get(model, PRICES_USD[OPUS])
+def cost_cad(model: str, input_tokens: int, output_tokens: int, usd_to_cad: float,
+             price_usd: tuple[float, float] | None = None) -> float:
+    pin, pout = price_usd or PRICES_USD.get(model, PRICES_USD[OPUS])
     return (input_tokens * pin + output_tokens * pout) / 1_000_000 * usd_to_cad
 
 
@@ -62,8 +63,9 @@ class Spend:
         self.daily_alert_cad = daily_alert_cad
         self.monthly_cap_cad = monthly_cap_cad
 
-    def record(self, model: str, input_tokens: int, output_tokens: int, job_id: str | None = None) -> float:
-        c = cost_cad(model, input_tokens, output_tokens, self.usd_to_cad)
+    def record(self, model: str, input_tokens: int, output_tokens: int, job_id: str | None = None,
+               price_usd: tuple[float, float] | None = None) -> float:
+        c = cost_cad(model, input_tokens, output_tokens, self.usd_to_cad, price_usd)
         self.conn.execute(
             "INSERT INTO spend(model, input_tokens, output_tokens, cost_cad, job_id) VALUES (?, ?, ?, ?, ?)",
             (model, input_tokens, output_tokens, c, job_id),

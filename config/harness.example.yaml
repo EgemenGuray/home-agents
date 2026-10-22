@@ -1,0 +1,80 @@
+# Copy to config/harness.yaml on the Studio (or the hub Mac in Phase 1). No secrets here: only the
+# names of environment variables that hold keys, set in the ignored .env file.
+
+providers:
+  claude:     {type: anthropic, location: cloud}                     # ANTHROPIC_API_KEY
+  openai:     {type: openai, base_url: "https://api.openai.com/v1", api_key_env: OPENAI_API_KEY, location: cloud}
+  gemini:     {type: openai, base_url: "https://generativelanguage.googleapis.com/v1beta/openai", api_key_env: GEMINI_API_KEY, location: cloud}
+  openrouter: {type: openai, base_url: "https://openrouter.ai/api/v1", api_key_env: OPENROUTER_API_KEY, location: cloud}
+  # Local servers run natively on the Studio (Metal), bound to 127.0.0.1; the agent container
+  # reaches them as host.docker.internal. All speak the OpenAI chat API.
+  ollama:     {type: openai, base_url: "http://host.docker.internal:11434/v1", location: local}
+  mlx:        {type: openai, base_url: "http://host.docker.internal:8080/v1", location: local}    # mlx_lm.server (launchd/)
+  llamacpp:   {type: openai, base_url: "http://host.docker.internal:8081/v1", location: local}   # llama-server
+  lmstudio:   {type: openai, base_url: "http://host.docker.internal:1234/v1", location: local}
+
+# Chains: tried in order until one answers. Replace <...> with models you have pulled or pay for.
+# "private" is used when a chat or task is marked private: local entries only, nothing leaves the house.
+models:
+  fast:     ["claude:claude-haiku-5-5", "ollama:<small-local-model>"]
+  default:  ["claude:claude-sonnet-5-5", "openai:<openai-model>", "mlx:<local-model>"]
+  planning: ["claude:claude-opus-5-5", "openai:<openai-model>", "mlx:<local-model>"]
+  private:  ["mlx:<local-model>", "ollama:<local-model>"]
+
+# USD per million tokens (input, output) for non-Claude cloud models, so the CAD cap counts them.
+prices_usd:
+  "openai:<openai-model>": [2.0, 8.0]
+
+profiles:
+  assistant:
+    model: default
+    tools: {allow: ["*"], ask: ["ha_call_service"]}
+  researcher:
+    model: planning
+    persona: "You research carefully and cite every source with its URL."
+    skills: [deep-research]
+    tools: {allow: [web_search, web_fetch, load_skill, save_artifact, remember_fact]}
+  private:
+    model: private
+    private: true
+    persona: "Everything you see stays on this machine."
+    tools: {allow: [load_skill, save_artifact, remember_fact, forget_fact]}
+  heartbeat:
+    model: fast
+    private: true
+    tools: {allow: []}
+
+skills_dir: skills
+task_workers: 2
+
+search:
+  searxng_url: "http://searxng:8080"   # the searxng service in deploy/studio/compose.yaml
+
+# MCP servers (stdio). Tools are named <server>__<tool>. Anything that isn't read-only asks first.
+mcp: {}
+#  github:
+#    command: github-mcp-server
+#    args: [stdio]
+#    env: [GITHUB_PERSONAL_ACCESS_TOKEN]   # names only
+#    allow: ["get_*", "list_*", "search_*"]
+#    ask: ["create_*", "merge_*"]
+
+# Chat apps. Each polls outward; unknown senders get a pairing code you approve in the console.
+channels:
+  telegram: {token_env: TELEGRAM_BOT_TOKEN}
+  allowed: []            # e.g. ["telegram:<your chat id>"]
+
+# Webhook triggers from the tailnet (HA, Uptime Kuma). Signed with HMAC-SHA256 in X-Signature.
+hooks:
+  uptime-down:
+    secret_env: HOOK_UPTIME_SECRET
+    profile: assistant
+    prompt: "A monitor reported a problem. Check what it is and tell me in one sentence whether I need to act."
+
+heartbeat:
+  every_minutes: 30
+  checklist: config/HEARTBEAT.md
+
+# Where unprompted messages go: Home Assistant's notify service for the phone app.
+notify:
+  service: notify.mobile_app_<your_phone>

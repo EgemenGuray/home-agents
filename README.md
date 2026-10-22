@@ -24,6 +24,7 @@ The agent side of the system (roadmap **Phase 1** E1.1 to E1.11, **Phase 2** E2.
 | `routines.py` | Suggests automations from repeated manual actions | S2.7.1 |
 | `scheduler.py` | Recurring jobs | E3.5 |
 | `api.py` | HTTP API for HA, the app and Telegram | S1.1.1 |
+| `harness/` | Local agent harness: any model (Claude, OpenAI, Gemini, OpenRouter, Ollama, MLX, llama.cpp), sessions, projects, background tasks, skills, MCP, heartbeat, Telegram, web console (`docs/harness.md`) | E1.12 |
 | `ha_integration/custom_components/home_agent` | HA conversation agent that forwards Assist to this service | S1.1.1 |
 
 ## Deploy
