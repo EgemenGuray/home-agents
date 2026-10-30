@@ -21,6 +21,17 @@ services:
       - ../../skills:/app/skills:ro
     ports: ["127.0.0.1:8700:8700"]
 
+  memory-db:
+    # Long-term memory (E1.12): Postgres + pgvector, moved here from the hub Mac (pg_dump/restore,
+    # docs/harness.md). No published port: only the agent reaches it, on this compose network.
+    image: pgvector/pgvector:0.8.0-pg16
+    restart: always
+    environment:
+      POSTGRES_DB: harness
+      POSTGRES_USER: harness
+      POSTGRES_PASSWORD: ${MEMORY_DB_PASSWORD:?set MEMORY_DB_PASSWORD in .env}
+    volumes: ["memory-db:/var/lib/postgresql/data"]
+
   searxng:
     # Web search for every model, not just Claude (E1.12). No account, no key, reachable only by the agent.
     image: searxng/searxng:2026.10.17-1c10abe2d
@@ -65,5 +76,6 @@ services:
 
 volumes:
   agent-data:
+  memory-db:
   stt-data:
   tts-data:

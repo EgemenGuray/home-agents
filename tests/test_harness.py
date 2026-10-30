@@ -159,7 +159,7 @@ def test_profile_stances_can_tighten_but_never_loosen():
 
 def test_load_profiles_keeps_default_assistant():
     ps = load_profiles({"researcher": {"model": "planning", "tools": {"allow": ["web_*"]}, "private": True}})
-    assert set(ps) == {"assistant", "researcher"} and ps["researcher"].private
+    assert set(ps) == {"assistant", "voice", "researcher"} and ps["researcher"].private
     assert ps["researcher"].stance("web_search") == "allow" and ps["researcher"].stance("ha_call_service") == "block"
 
 
@@ -181,7 +181,7 @@ def test_loop_runs_tools_and_returns_final_text(conn):
 def test_loop_blocked_tool_is_unknown_to_the_model(conn):
     agent, p = make_agent(conn, [call("echo", {}), say("ok")], [echo_tool()])
     agent.run([{"role": "user", "content": "go"}], Profile("assistant", block=("echo",)))
-    assert p.calls[0]["tools"] == [] and p.calls[1]["messages"][-1]["is_error"]
+    assert "echo" not in [t["name"] for t in p.calls[0]["tools"]] and p.calls[1]["messages"][-1]["is_error"]
 
 
 def test_chat_returns_pending_approval_without_running_the_tool(conn, phone):
@@ -234,10 +234,10 @@ def test_repo_skills_load():
 
 # Tasks -------------------------------------------------------------------------------------------
 
-def make_runner(conn, tmp_path, results, tools=()):
+def make_runner(conn, tmp_path, results, tools=(), **kw):
     agent, p = make_agent(conn, results, tools)
     store = Store(conn, tmp_path)
-    return TaskRunner(store, agent, {"assistant": Profile("assistant")}, start=False), store, p
+    return TaskRunner(store, agent, {"assistant": Profile("assistant")}, start=False, **kw), store, p
 
 
 def test_task_runs_saves_artifact_and_notifies(conn, tmp_path):
@@ -278,11 +278,16 @@ def test_attachments_become_images_and_text(conn, tmp_path):
     assert first["images"][0]["media_type"] == "image/png" and "note" in first["content"]
 
 
-def test_failed_model_marks_task_failed(conn, tmp_path):
-    runner, store, _ = make_runner(conn, tmp_path, [ProviderDown("down")])
+def test_unreachable_model_is_retried_then_marks_task_failed(conn, tmp_path):
+    runner, store, _ = make_runner(conn, tmp_path, [ProviderDown("down")] * 3, retry_base_seconds=0)
     t = runner.submit("x")
     runner.run_next()
-    assert store.task(t["id"])["state"] == "failed"
+    assert store.task(t["id"])["state"] == "queued"
+    while runner.run_next():
+        pass
+    t = store.task(t["id"])
+    kinds = [e["kind"] for e in store.events(t["id"])]
+    assert t["state"] == "failed" and t["attempts"] == 3 and kinds.count("retry_scheduled") == 2
 
 
 # Heartbeat, channels, MCP ------------------------------------------------------------------------

@@ -13,6 +13,9 @@ services:
       - agent-data:/data
       - ./policy.yaml:/app/config/policy.yaml:ro
       - ./keys:/app/config/keys:ro          # phone PUBLIC keys only
+      - ../../config/harness.yaml:/app/config/harness.yaml:ro     # E1.12; copy from harness.example.yaml
+      - ../../config/HEARTBEAT.md:/app/config/HEARTBEAT.md:ro
+      - ../../skills:/app/skills:ro
     ports:
       - "127.0.0.1:8700:8700"
     mem_limit: 512m
@@ -20,6 +23,20 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8700/healthz')"]
       interval: 30s
       retries: 3
+
+  memory-db:
+    # Long-term memory (E1.12): Postgres + pgvector. No published port: only the agent reaches it, on
+    # this compose network. Small on purpose; the 8 GB Mac mini also runs the HA VM.
+    image: pgvector/pgvector:0.8.0-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: harness
+      POSTGRES_USER: harness
+      POSTGRES_PASSWORD: ${MEMORY_DB_PASSWORD:?set MEMORY_DB_PASSWORD in .env}
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=20"]
+    volumes:
+      - memory-db:/var/lib/postgresql/data
+    mem_limit: 256m
 
   nats:
     image: nats:2.10-alpine
@@ -33,3 +50,4 @@ services:
 
 volumes:
   agent-data:
+  memory-db:

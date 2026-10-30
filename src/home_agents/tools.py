@@ -88,6 +88,12 @@ class HomeAssistant:
             out.append({"entity_id": eid, "name": name, "state": s["state"]})
         return out[:60]
 
+    def snapshot(self) -> dict[str, str]:
+        """Every exposed entity's state, for routine triggers and conditions."""
+        r = self.http.get(f"{self.url}/api/states")
+        r.raise_for_status()
+        return {s["entity_id"]: s["state"] for s in r.json()}
+
     def tools(self) -> list[Tool]:
         return [
             Tool(

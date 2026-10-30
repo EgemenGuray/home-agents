@@ -24,7 +24,7 @@ The agent side of the system (roadmap **Phase 1** E1.1 to E1.11, **Phase 2** E2.
 | `routines.py` | Suggests automations from repeated manual actions | S2.7.1 |
 | `scheduler.py` | Recurring jobs | E3.5 |
 | `api.py` | HTTP API for HA, the app and Telegram | S1.1.1 |
-| `harness/` | Local agent harness: any model (Claude, OpenAI, Gemini, OpenRouter, Ollama, MLX, llama.cpp), sessions, projects, background tasks, skills, MCP, heartbeat, Telegram, web console (`docs/harness.md`) | E1.12 |
+| `harness/` | Local agent harness: any model (Claude, OpenAI, Gemini, OpenRouter, Ollama, MLX, llama.cpp), sessions, projects, background tasks with plan and spec modes, coding workspaces, crews and flows, hooks, long-term memory on Postgres + pgvector with a nightly sleep job, routines (`docs/routines.md`), skills, MCP, heartbeat, Telegram, the `home-agent` CLI and a web console (`docs/harness.md`) | E1.12 |
 | `ha_integration/custom_components/home_agent` | HA conversation agent that forwards Assist to this service | S1.1.1 |
 
 ## Deploy
@@ -38,12 +38,13 @@ There are two setups. In both, the vault, the credential broker and the egress r
 | Models | Cloud only. Private requests fail instead of falling back to the cloud, because there is no local model | Cloud plus the local MLX model (`deploy/studio/launchd/`); private requests stay local |
 | Voice | HA Assist on the hub Mac | Voice server on the Studio (LiveKit, Whisper, Piper); HA Assist on the hub Mac is the fallback |
 | Web search for the harness | Claude's built-in search only | SearXNG in `deploy/studio/compose.yaml` for any model |
+| Harness memory (Postgres + pgvector) | `memory-db` on the hub Mac; small local embedding model; nightly sleep may use cloud models for non-private memories | `memory-db` on the Studio; embeddings and the nightly sleep run on local models |
 | Deploy | `deploy/deploy.sh <tag>` on the hub Mac | `deploy/deploy.sh <tag>` on the Studio |
 
 Install, Mac mini only:
 
 1. home-infra first (hub Mac baseline, vault, `services/egress/`).
-2. On the hub Mac, in `deploy/hub/`: copy `.env.example` to `.env`, copy `config/policy.example.yaml` to `policy.yaml`, and put the phone's public key in `keys/`. Then run `deploy/deploy.sh <tag>` and `tailscale serve` port 8700.
+2. On the hub Mac, in `deploy/hub/`: copy `.env.example` to `.env` (including `MEMORY_DB_PASSWORD`), copy `config/policy.example.yaml` to `policy.yaml`, put the phone's public key in `keys/`, and create `config/harness.yaml` (`docs/harness.md`). Then run `deploy/deploy.sh <tag>` and `tailscale serve` port 8700.
 3. Rent the workspace VM (16 to 32 GB, Ubuntu 24.04). In `deploy/workspace-host/` copy `.env.example` to `.env`, set `HUB_TAILNET_HOST`, then run `sudo ./setup.sh`. It joins the tailnet and blocks all inbound traffic.
 
 Install, Mac mini + Mac Studio:
