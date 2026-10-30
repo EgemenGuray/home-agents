@@ -21,3 +21,13 @@ def test_converse_and_signed_approval(tmp_path, monkeypatch, phone):
     assert bad.status_code == 400
     ok = http.post(f"/v1/approvals/{req.id}", json={"decision": "approve", "signature": phone.sign(req, "approve")})
     assert ok.json()["state"] == "approved"
+
+
+def test_metrics_counts_pending_approvals(tmp_path, monkeypatch, phone):
+    monkeypatch.setenv("HOME_AGENTS_SERVICE_TOKEN", "test-token")
+    approvals = Approvals([phone.public_pem])
+    app = build_app(Settings(data_dir=tmp_path, policy_file=tmp_path / "none.yaml"), FakeClient([]), approvals)
+    approvals.request("send", "Send draft", {"draft": 1})
+    body = TestClient(app).get("/metrics", headers={"Authorization": "Bearer test-token"}).text
+    assert "home_agents_approvals_pending 1" in body
+    assert 'home_agents_spend_cad{period="month"} 0' in body
