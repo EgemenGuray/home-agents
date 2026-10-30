@@ -29,12 +29,29 @@ The agent side of the system (roadmap **Phase 1** E1.1 to E1.11, **Phase 2** E2.
 
 ## Deploy
 
-| Where | File | Phase |
+There are two setups. In both, the vault, the credential broker and the egress routes (home-infra) stay on the Mac mini. What changes is where the agent runs.
+
+| | **Mac mini only** (Phase 1) | **Mac mini + Mac Studio** (Phase 2 on) |
 |---|---|---|
-| Hub Mac | `deploy/hub/compose.yaml` (agent + NATS, localhost only) | 1 |
-| Rented workspace VM | `deploy/workspace-host/` (egress gateway, Langfuse, workspace images in `workspaces/`) | 1 |
-| Mac Studio | `deploy/studio/` (same image, voice server, local model under launchd) | 2 |
-| Any | `deploy/deploy.sh <tag>`: deploy with health checks and automatic rollback | 1 |
+| Agent service + NATS | Hub Mac: `deploy/hub/compose.yaml`, localhost only | Studio: `deploy/studio/compose.yaml`, same image and the same `deploy/hub/` policy, keys and NATS config |
+| Workspaces | Rented Linux VM on the tailnet: `deploy/workspace-host/` (egress gateway, Langfuse, images in `workspaces/`). Linux only, no macOS VMs | Studio: Docker workspaces and up to 2 Tart macOS VMs; the rented VM is cancelled after a week of both running |
+| Models | Cloud only. Private requests fail instead of falling back to the cloud, because there is no local model | Cloud plus the local MLX model (`deploy/studio/launchd/`); private requests stay local |
+| Voice | HA Assist on the hub Mac | Voice server on the Studio (LiveKit, Whisper, Piper); HA Assist on the hub Mac is the fallback |
+| Web search for the harness | Claude's built-in search only | SearXNG in `deploy/studio/compose.yaml` for any model |
+| Deploy | `deploy/deploy.sh <tag>` on the hub Mac | `deploy/deploy.sh <tag>` on the Studio |
+
+Install, Mac mini only:
+
+1. home-infra first (hub Mac baseline, vault, `services/egress/`).
+2. On the hub Mac, in `deploy/hub/`: copy `.env.example` to `.env`, copy `config/policy.example.yaml` to `policy.yaml`, and put the phone's public key in `keys/`. Then run `deploy/deploy.sh <tag>` and `tailscale serve` port 8700.
+3. Rent the workspace VM (16 to 32 GB, Ubuntu 24.04). In `deploy/workspace-host/` copy `.env.example` to `.env`, set `HUB_TAILNET_HOST`, then run `sudo ./setup.sh`. It joins the tailnet and blocks all inbound traffic.
+
+Install, Mac mini + Mac Studio:
+
+1. Everything above, so the agents work before the Studio arrives.
+2. home-infra `docs/studio-checklist.md` on the Studio.
+3. On the Studio: `deploy/studio/.env` (same keys as the hub Mac's, plus the Studio ones), the MLX launchd job, then `docker compose -f deploy/studio/compose.yaml up -d`.
+4. Run both for a week, then stop the agent on the hub Mac and cancel the rented VM (`docs/phase-2.md`).
 
 Agent code changes only by pull request (`docs/code-changes.md`); protected paths are listed in `PROTECTED_PATHS` and enforced by CI and CODEOWNERS. What's ready versus what needs the Studio is in `docs/phase-2.md`.
 

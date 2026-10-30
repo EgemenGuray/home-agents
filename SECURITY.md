@@ -1,6 +1,6 @@
 # Security rules for this repo
 
-This repo is part of a home system that controls real devices and accounts, so these rules are hard requirements.
+This repo is part of a home system that controls real devices and accounts, so these rules are hard requirements. They apply the same way to the Mac mini only setup and the Mac mini + Mac Studio setup; the Studio, when present, follows every rule the Mac mini does.
 
 - Never commit API keys, tokens, passwords, private keys, Wi-Fi passwords, the home's public IP, hostnames, Tailscale names, MAC addresses, account emails or phone numbers.
 - Real values live only in ignored files (`.env`, `secrets.yaml`, `*.local.*`) on the machine that needs them, copied from the vault. Each repo ships `*.example` files with fake values.

@@ -1,6 +1,6 @@
 # Agent harness (E1.12)
 
-The harness turns the agent service into a local, any-model version of Meta Muse, Claude Cowork and Dispatch, OpenClaw and ChatGPT: chat sessions and projects, background tasks you can steer or stop, skills, MCP connectors, a heartbeat, chat-app channels and a web console. It runs on the Studio (the hub Mac in Phase 1) behind the same approvals, audit, spend cap and egress rules as everything else here. The full feature comparison lives in the design docs ("Agent harness: feature comparison and plan").
+The harness turns the agent service into a local, any-model version of Meta Muse, Claude Cowork and Dispatch, OpenClaw and ChatGPT: chat sessions and projects, background tasks you can steer or stop, skills, MCP connectors, a heartbeat, chat-app channels and a web console. It runs wherever the agent service runs (the hub Mac with the Mac mini only, the Studio with the Mac mini + Mac Studio) behind the same approvals, audit, spend cap and egress rules as everything else here. The full feature comparison lives in the design docs ("Agent harness: feature comparison and plan").
 
 ## What is where
 
@@ -25,8 +25,10 @@ The harness turns the agent service into a local, any-model version of Meta Muse
 
 1. `cp config/harness.example.yaml config/harness.yaml` and `cp config/HEARTBEAT.example.md config/HEARTBEAT.md`; replace the `<...>` model names with ones you use.
 2. Put only the keys you use in the ignored `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `TELEGRAM_BOT_TOKEN`, hook secrets). Local models need none.
-3. On the Studio: `ollama serve` or the MLX launchd job, then `docker compose -f deploy/studio/compose.yaml up -d`.
-4. `tailscale serve` the agent port as before, open `https://<studio>.<tailnet>.ts.net/console` and paste the service token.
+3. Start it for your setup:
+   - **Mac mini only:** `deploy/deploy.sh <tag>` on the hub Mac. Use cloud providers only. The 8 GB Mac mini already runs the HA VM, so don't run a local model on it. `private` chats fail until there is a local model, and `web_search` needs Claude's built-in search because SearXNG isn't deployed.
+   - **Mac mini + Mac Studio:** on the Studio, `ollama serve` or the MLX launchd job, then `docker compose -f deploy/studio/compose.yaml up -d`. That includes SearXNG.
+4. `tailscale serve` the agent port as before, open `https://<agent-host>.<tailnet>.ts.net/console` and paste the service token.
 
 With no `config/harness.yaml` the service runs exactly as before.
 

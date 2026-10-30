@@ -1,6 +1,6 @@
 # Phase 2 on the Mac Studio (E2.1 to E2.7)
 
-Starts the day the Studio arrives. What is ready in this repo, and what still needs the hardware.
+This is the move from the **Mac mini only** setup to the **Mac mini + Mac Studio** setup. It starts the day the Studio arrives. Nothing here changes the Mac mini only setup, which keeps working as it is until you switch. The table lists what is ready in this repo and what still needs the hardware.
 
 | Item | Ready here | Needs the Studio |
 |---|---|---|
