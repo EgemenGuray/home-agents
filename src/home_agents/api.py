@@ -20,10 +20,15 @@ from .approvals import ApprovalError, Approvals
 from .audit import AuditLog
 from .broker import BrokerError, CredentialBroker
 from .db import connect
+from .localllm import LocalModel
 from .memory import Memory
 from .models import Spend, SpendExceeded
 from .settings import Settings
 from .tools import HomeAssistant, ToolRegistry, memory_tools
+
+
+# Said when the cloud model can't be reached and there is no local model to fall back on.
+CLOUD_DOWN = "I can't reach my model right now. Lights, scenes, timers and alarms still work."
 
 
 class ConverseIn(BaseModel):
@@ -53,20 +58,23 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
     spend = Spend(conn, settings.usd_to_cad, settings.daily_alert_cad, settings.monthly_cap_cad)
     policy = yaml.safe_load(Path(settings.policy_file).read_text()) if Path(settings.policy_file).exists() else {}
 
+    ha = HomeAssistant(settings.ha_url, settings.ha_token) if settings.ha_url and settings.ha_token else None
+    approval_cfg = policy.get("approvals", {})
     if approvals is None:
-        keys = [Path(p).read_bytes() for p in policy.get("approvals", {}).get("phone_public_keys", [])]
-        approvals = Approvals(keys, audit=audit) if keys else None
+        keys = [Path(p).read_bytes() for p in approval_cfg.get("phone_public_keys", [])]
+        approvals = Approvals(keys, notify=approval_push(ha, approval_cfg), audit=audit) if keys else None
     broker = CredentialBroker(approvals, set(policy.get("agents_sites", [])), audit) if approvals else None
 
     tools = ToolRegistry(memory_tools(memory))
-    ha = HomeAssistant(settings.ha_url, settings.ha_token) if settings.ha_url and settings.ha_token else None
     if ha:
         for t in ha.tools():
             tools.add(t)
     if client is None:  # pragma: no cover
         import anthropic
         client = anthropic.Anthropic()
-    agent = Agent(client, tools, memory, spend, audit, approvals, settings.request_token_budget)
+    local = LocalModel(settings.local_llm_url) if settings.local_llm_url else None  # Mac mini + Mac Studio only
+    agent = Agent(client, tools, memory, spend, audit, approvals, settings.request_token_budget, local=local,
+                  followup=followup(ha, approval_cfg.get("notify_service", "notify.owner_phone")))
 
     service_token = os.environ.get("HOME_AGENTS_SERVICE_TOKEN", "")
 
@@ -90,6 +98,11 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
         except BudgetExceeded:
             return {"text": "That got too long for one request. Try asking in smaller steps.",
                     "conversation_id": body.conversation_id}
+        except Exception as exc:  # the speaker must say something useful, never go silent on a 500
+            if not _model_unreachable(exc):
+                raise
+            audit.record("model_unreachable", "agent", {"error": type(exc).__name__})
+            return {"text": CLOUD_DOWN, "conversation_id": body.conversation_id, "degraded": True}
         return {"text": r.text, "conversation_id": r.conversation_id, "pending_approvals": r.pending_approvals}
 
     @app.get("/v1/memory", dependencies=[Depends(auth)])
@@ -147,6 +160,56 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
         app.state.pairing = pairing
 
     app.state.agent = agent
+    app.state.ha = ha
     app.state.approvals = approvals
     app.state.broker = broker
     return app
+
+
+def _model_unreachable(exc: Exception) -> bool:
+    try:
+        import anthropic
+    except ImportError:  # pragma: no cover
+        return False
+    return isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError, anthropic.InternalServerError,
+                            anthropic.RateLimitError))
+
+
+def _service(ha, service: str, data: dict) -> None:
+    domain, _, name = service.partition(".")
+    ha.call_service({"domain": domain, "service": name, "data": data})
+
+
+def approval_push(ha, cfg: dict):
+    """One push per approval. Tapping it opens the request in the app; Face ID signs it. One tap, one glance.
+
+    The push carries only the summary and a link with the request id; the decision is never made from the
+    notification itself, because only the app's Secure Enclave key can sign it.
+    """
+    service = cfg.get("notify_service", "notify.owner_phone")
+    link = cfg.get("app_link", "homeapp://approvals").rstrip("/")
+
+    def push(req) -> None:
+        if ha is None:
+            return
+        minutes = max(1, round((req.expires_at - req.created_at) / 60))
+        url = f"{link}/{req.id}"
+        _service(ha, service, {
+            "title": "Approve?",
+            "message": f"{req.summary}. Tap to review. Expires in {minutes} min.",
+            "data": {"url": url, "clickAction": url, "tag": req.id, "group": "approvals",
+                     "push": {"interruption-level": "time-sensitive"}, "ttl": 0, "priority": "high"},
+        })
+    return push
+
+
+def followup(ha, notify_service: str):
+    """After an approval: say the result in the room that asked, or push it if the request was typed."""
+    def send(text: str, channel: str, room: str | None) -> None:
+        if ha is None:
+            return
+        if channel == "voice" and room:
+            _service(ha, "script.announce", {"message": text, "rooms": [room]})
+        else:
+            _service(ha, notify_service, {"title": "Home", "message": text})
+    return send

@@ -14,3 +14,10 @@ routes:
   home: {country: CA}
   nord-us-ny: {country: US}
   nord-de: {country: DE}
+
+approvals:
+  # Public keys (PEM) of the app's Secure Enclave keys. Only the phone can sign a decision.
+  phone_public_keys: [config/keys/phone.pem]
+  # Each request is one push. Tapping it opens the request in the app, and Face ID signs it.
+  notify_service: notify.owner_phone
+  app_link: homeapp://approvals

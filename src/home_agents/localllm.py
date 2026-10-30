@@ -7,6 +7,9 @@ through HA's local intents, which never needed the cloud.
 
 from __future__ import annotations
 
+import time
+from typing import Callable
+
 import httpx
 
 LOCAL_SYSTEM = ("You are the home's offline assistant. Answer briefly for speech. You cannot browse the web; "
@@ -14,16 +17,26 @@ LOCAL_SYSTEM = ("You are the home's offline assistant. Answer briefly for speech
 
 
 class LocalModel:
-    def __init__(self, url: str, model: str = "local", timeout: float = 60.0, client: httpx.Client | None = None):
+    def __init__(self, url: str, model: str = "local", timeout: float = 60.0, client: httpx.Client | None = None,
+                 cache_seconds: float = 30.0, clock: Callable[[], float] = time.monotonic):
         self.url = url.rstrip("/")
         self.model = model
         self.http = client or httpx.Client(timeout=timeout)
+        self.cache_seconds = cache_seconds
+        self.clock = clock
+        self._checked: tuple[float, bool] | None = None
 
     def available(self) -> bool:
+        # Cached, so a switched-off Studio costs one 2 s probe every 30 s, not 2 s on every voice request.
+        now = self.clock()
+        if self._checked and now - self._checked[0] < self.cache_seconds:
+            return self._checked[1]
         try:
-            return self.http.get(f"{self.url}/health", timeout=2).status_code == 200
+            ok = self.http.get(f"{self.url}/health", timeout=2).status_code == 200
         except httpx.HTTPError:
-            return False
+            ok = False
+        self._checked = (now, ok)
+        return ok
 
     def answer(self, history: list[dict], text: str, facts: str = "") -> tuple[str, int, int]:
         messages = [{"role": "system", "content": f"{LOCAL_SYSTEM}\nHousehold facts:\n{facts}"}]

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -18,6 +19,9 @@ from typing import Callable
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+
+
+log = logging.getLogger(__name__)
 
 
 class ApprovalError(Exception):
@@ -83,7 +87,10 @@ class Approvals:
             self._on_approve[req.id] = on_approve
         if self.audit:
             self.audit.record("approval_requested", "system", {"id": req.id, "kind": kind, "summary": summary}, job_id)
-        self.notify(req)
+        try:  # a push that fails must not lose the request; it is still listed in the app
+            self.notify(req)
+        except Exception:
+            log.exception("approval push for %s failed", req.id)
         return req
 
     def get(self, request_id: str) -> ApprovalRequest | None:
@@ -121,7 +128,10 @@ class Approvals:
             self.audit.record(f"approval_{req.state}", "owner", {"id": req.id, "kind": req.kind}, req.job_id)
         callback = self._on_approve.pop(req.id, None)
         if req.state == "approved" and callback:
-            callback(req)
+            try:  # the decision stands even if the follow-up fails; the callback reports its own errors
+                callback(req)
+            except Exception:
+                log.exception("on_approve for %s failed", req.id)
         return req
 
     def _expire(self) -> None:
