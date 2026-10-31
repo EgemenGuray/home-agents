@@ -19,6 +19,7 @@ The harness turns the agent service into a local, any-model version of Meta Muse
 | `harness/channels.py` | Telegram by long polling (no open port), pairing codes for unknown senders, a session per sender |
 | `harness/api.py` | `/v1/h/*` routes, signed webhooks at `/v1/hooks/<name>`, the console at `/console` |
 | `harness/daemon.py` | Starts the heartbeat and channel loops; phone notifications through HA's notify service |
+| `metrics.py` | `/metrics` behind the service token: spend vs cap, waiting approvals, tasks by state, provider reachability. Scraped by Prometheus in home-infra `services/monitoring/` |
 | `harness/console/index.html` | Web console: chat, tasks with live steps, projects, memory, approvals (read-only), models and skills, pairing |
 
 ## Run it

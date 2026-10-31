@@ -159,6 +159,14 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
         app.state.harness = harness
         app.state.pairing = pairing
 
+    @app.get("/metrics", dependencies=[Depends(auth)])
+    def metrics():
+        from fastapi.responses import PlainTextResponse
+
+        from .metrics import render
+        return PlainTextResponse(render(conn, spend, approvals, getattr(app.state, "harness", None)),
+                                 media_type="text/plain; version=0.0.4")
+
     app.state.agent = agent
     app.state.ha = ha
     app.state.approvals = approvals
