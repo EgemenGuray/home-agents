@@ -517,3 +517,11 @@ def test_cli_drives_the_service(app_client, capsys):
     cli.main(["resume-all"], c)
     with pytest.raises(SystemExit):
         cli.main(["show", "task_nope"], c)
+
+
+def test_voice_through_the_harness_never_goes_silent_when_models_are_down(app_client):
+    from home_agents.harness.providers import ProviderDown
+    c, h, p = app_client
+    p.results += [ProviderDown("outage")]
+    r = c.post("/v1/converse", json={"text": "what's the news", "conversation_id": "c2"}, headers=H).json()
+    assert r["degraded"] is True and "Lights, scenes" in r["text"]

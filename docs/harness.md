@@ -48,9 +48,10 @@ It runs wherever the agent service runs, behind the same approvals, audit, spend
 | `harness/search.py` | `web_search` and `web_fetch` through self-hosted SearXNG, for models without built-in search |
 | `harness/heartbeat.py` | Every 30 minutes a local model reads `HEARTBEAT.md` and the state. Silent unless something needs you |
 | `harness/channels.py` | Telegram by long polling (no open port), pairing codes for unknown senders, a session per sender |
-| `harness/api.py` | `/v1/h/*` routes covering chat, tasks, the live event stream (SSE), questions, pause, halt, feedback, memory, routines and metrics. Also signed webhooks at `/v1/hooks/<name>` and the console at `/console` |
+| `harness/api.py` | `/v1/h/*` routes covering chat, tasks, the live event stream (SSE), questions, pause, halt, feedback, memory, routines and JSON metrics. Also signed webhooks at `/v1/hooks/<name>` and the console at `/console` |
 | `harness/cli.py` | `home-agent` command: chat, task (any mode, `--repo`, `--model`), watch, steer, pause, resume, stop, answer, halt, recall, sleep |
 | `harness/daemon.py` | Heartbeat, channels, the routine clock and HA state feed, and the nightly memory sleep. Phone notifications go through HA's notify service |
+| `metrics.py` | `/metrics` behind the service token: spend vs cap, waiting approvals, tasks by state, provider reachability. Scraped by Prometheus in home-infra `services/monitoring/` |
 | `harness/console/index.html` | Web console: chat, tasks with live steps, projects, memory, approvals (read-only), models and skills, pairing |
 
 ## How it fits with Home Assistant

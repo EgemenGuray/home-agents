@@ -1,6 +1,21 @@
 {
   "config": {
-    "step": {"user": {"title": "Home Agent", "data": {"url": "Agent service URL (tailnet)", "token": "Service token"}}},
-    "error": {"cannot_connect": "Cannot reach the agent service"}
+    "step": {
+      "user": {
+        "title": "Home Agent",
+        "data": {
+          "url": "Agent service URL (tailnet)",
+          "token": "Service token",
+          "local_first": "Let Home Assistant handle device commands, timers and alarms first (fast, works offline)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the agent service",
+      "invalid_auth": "The service token was refused"
+    },
+    "abort": {
+      "already_configured": "This agent service is already set up"
+    }
   }
 }

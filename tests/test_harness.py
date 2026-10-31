@@ -373,6 +373,17 @@ def test_api_chat_session_and_overview(api_client):
     assert c.post("/v1/h/chat", json={"text": "hi"}).status_code == 401
 
 
+def test_metrics_endpoint(api_client):
+    c, _, _ = api_client
+    assert c.get("/metrics").status_code == 401
+    c.post("/v1/h/chat", json={"text": "hi"}, headers=H)
+    body = c.get("/metrics", headers=H).text
+    assert "home_agents_up 1" in body
+    assert 'home_agents_spend_limit_cad{period="month"}' in body
+    assert 'home_agents_tasks{state="failed"} 0' in body
+    assert 'home_agents_provider_available{location=' in body
+
+
 def test_api_webhook_needs_signature_and_creates_task(api_client):
     from home_agents.harness.api import sign
     c, app, _ = api_client

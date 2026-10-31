@@ -1,13 +1,16 @@
 """The single decision maker (E1.1): one Claude agent behind voice, app and Telegram.
 
 A manual tool loop so that approvals, budgets and auditing sit in code the model
-cannot change. Simple device commands never get here: HA's local intents handle them.
+cannot change. Simple device commands never get here: the HA integration tries HA's local
+intents first. An approved action runs the moment the phone signs it, and the result is said
+in the room that asked (or pushed to the phone), so nobody has to ask twice.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Callable
 
 import anthropic
 
@@ -30,6 +33,8 @@ for approval instead of claiming it is done."""
 WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 5,
               "user_location": {"type": "approximate", "country": "CA"}}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# A spoken answer that takes longer than this is worse than a quick "I can't right now".
+VOICE_TIMEOUT_S = 20.0
 
 
 class BudgetExceeded(Exception):
@@ -48,8 +53,11 @@ class Reply:
 
 class Agent:
     def __init__(self, client: anthropic.Anthropic, tools: ToolRegistry, memory: Memory, spend: Spend,
-                 audit: AuditLog, approvals=None, token_budget: int = 60000, max_iterations: int = 8, local=None):
+                 audit: AuditLog, approvals=None, token_budget: int = 60000, max_iterations: int = 8, local=None,
+                 followup: Callable[[str, str, str | None], None] | None = None):
         self.client = client
+        # Says or pushes what happened after the request returned: followup(text, channel, room).
+        self.followup = followup or (lambda _text, _channel, _room: None)
         self.local = local  # LocalModel on the Studio (Phase 2), or None
         self.tools = tools
         self.memory = memory
@@ -100,6 +108,7 @@ class Agent:
         pending: list[str] = []
         response = None
 
+        extra = {"timeout": VOICE_TIMEOUT_S} if channel == "voice" else {}
         for _ in range(self.max_iterations):
             response = self.client.beta.messages.create(
                 model=model,
@@ -110,6 +119,7 @@ class Agent:
                 output_config={"effort": "low" if channel == "voice" else "medium"},
                 betas=[FALLBACK_BETA],
                 fallbacks="default",
+                **extra,
             )
             used_in += response.usage.input_tokens
             used_out += response.usage.output_tokens
@@ -129,14 +139,14 @@ class Agent:
             for block in response.content:
                 if block.type != "tool_use":
                     continue
-                results.append(self._run_tool(block, job_id, conversation_id, pending))
+                results.append(self._run_tool(block, job_id, conversation_id, pending, channel, room))
             messages.append({"role": "user", "content": results})
 
         answer = _final_text(response)
         self.memory.add_turn(conversation_id, "assistant", answer, channel, room)
         return Reply(answer, conversation_id, model, used_in, used_out, pending)
 
-    def _run_tool(self, block, job_id, conversation_id, pending) -> dict:
+    def _run_tool(self, block, job_id, conversation_id, pending, channel="voice", room=None) -> dict:
         tool = self.tools.get(block.name)
         inp = dict(block.input) if isinstance(block.input, dict) else {}
         if tool is None:
@@ -145,10 +155,14 @@ class Agent:
             if self.approvals is None:
                 content = "This action needs the owner's approval, and approvals are not set up yet. Do not retry."
             else:
-                req = self.approvals.request(kind="tool", summary=f"{block.name} {inp}", payload={"tool": block.name, "input": inp},
-                                             job_id=job_id, conversation_id=conversation_id)
+                summary = describe(block.name, inp)
+                req = self.approvals.request(
+                    kind="tool", summary=summary, payload={"tool": block.name, "input": inp}, job_id=job_id,
+                    conversation_id=conversation_id,
+                    on_approve=lambda _req, t=tool, i=inp: self._run_approved(t, i, summary, job_id, conversation_id, channel, room))
                 pending.append(req.id)
-                content = "Approval requested on the owner's phone. Tell the user it will run once approved."
+                content = ("Approval requested on the owner's phone. Tell the user in a few words that it will run "
+                           "as soon as they approve, and that you will confirm here when it is done.")
             self.audit.record("tool_blocked_pending_approval", "agent", {"tool": block.name, "input": inp}, job_id)
             return {"type": "tool_result", "tool_use_id": block.id, "content": content}
         try:
@@ -158,6 +172,30 @@ class Agent:
         except Exception as exc:  # tool errors go back to the model, not up the stack
             self.audit.record("tool_error", "agent", {"tool": block.name, "error": str(exc)}, job_id)
             return {"type": "tool_result", "tool_use_id": block.id, "is_error": True, "content": str(exc)[:500]}
+
+
+    def _run_approved(self, tool, inp, summary, job_id, conversation_id, channel, room) -> None:
+        """Runs once the phone has signed. Reports back where the request came from."""
+        try:
+            tool.handler(inp)
+            self.audit.record("tool_call", "agent", {"tool": tool.name, "input": inp, "approved": True}, job_id)
+            text = f"Approved. Done: {summary}."
+        except Exception as exc:  # the owner approved it, so they hear that it failed
+            self.audit.record("tool_error", "agent", {"tool": tool.name, "error": str(exc)}, job_id)
+            text = f"Approved, but {summary} failed: {str(exc)[:120]}"
+        if conversation_id:
+            self.memory.add_turn(conversation_id, "assistant", text, channel, room)
+        self.followup(text, channel, room)
+
+
+def describe(name: str, inp: dict) -> str:
+    """What the phone shows and the speaker says: "unlock front door", not a JSON blob."""
+    if name == "ha_call_service":
+        target = inp.get("entity_id") or inp.get("area_id") or inp.get("domain", "")
+        target = str(target).split(".", 1)[-1].replace("_", " ")
+        return f"{str(inp.get('service', '')).replace('_', ' ')} {target}".strip()
+    args = ", ".join(f"{k}={v}" for k, v in inp.items())
+    return f"{name.replace('_', ' ')}" + (f" ({args[:120]})" if args else "")
 
 
 def _final_text(response) -> str:
