@@ -10,17 +10,23 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import json
 import re
+import time
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from ..models import SpendExceeded
 from . import Harness
 from .channels import Pairing
 from .router import NoModelAvailable
+from .routines import RoutineError, describe
+from .sleep import Sleep
+from .tasks import Halted
 
 CONSOLE = Path(__file__).parent / "console" / "index.html"
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -32,6 +38,8 @@ class ChatIn(BaseModel):
     profile: str | None = None
     project_id: str | None = None
     private: bool | None = None
+    model: str | None = None  # a chain alias or provider:model, for this turn only
+    temporary: bool = False   # nothing stored, nothing remembered
 
 
 class Attachment(BaseModel):
@@ -47,6 +55,41 @@ class TaskIn(BaseModel):
     project_id: str | None = None
     private: bool = False
     attachments: list[Attachment] = []
+    mode: str = "auto"        # auto, plan, spec, crew, flow
+    options: dict = {}        # model, repo, crew, flow, inputs, max_attempts
+
+
+class TextIn(BaseModel):
+    text: str
+
+
+class FeedbackIn(BaseModel):
+    rating: int
+    note: str = ""
+    task_id: str | None = None
+    session_id: str | None = None
+    profile: str | None = None
+
+
+class KnowledgeIn(BaseModel):
+    title: str
+    text: str
+    project_id: str | None = None
+    private: bool = True
+
+
+class ForkIn(BaseModel):
+    upto_message_id: int | None = None
+    title: str = ""
+
+
+class RoutineEventIn(BaseModel):
+    """What an HA automation forwards: a state change (entity_id, new_state, old_state) or any event."""
+    event_type: str = "state_changed"
+    entity_id: str | None = None
+    new_state: str | None = None
+    old_state: str | None = None
+    data: dict = {}
 
 
 class SteerIn(BaseModel):
@@ -77,7 +120,8 @@ def mount(app: FastAPI, h: Harness, auth, hooks: dict | None = None, pairing: Pa
     @app.post("/v1/h/chat", dependencies=deps)
     def chat(body: ChatIn):
         try:
-            session, r = h.chat(body.session_id, body.text, profile=body.profile, project_id=body.project_id, private=body.private)
+            session, r = h.chat(body.session_id, body.text, profile=body.profile, project_id=body.project_id, private=body.private,
+                                model=body.model, temporary=body.temporary)
         except SpendExceeded as exc:
             raise HTTPException(402, f"Spend cap reached: {exc}") from exc
         except NoModelAvailable as exc:
@@ -120,9 +164,11 @@ def mount(app: FastAPI, h: Harness, auth, hooks: dict | None = None, pairing: Pa
             raise HTTPException(413, "attachments over 10 MB")
         try:
             return h.tasks.submit(body.prompt, title=body.title, profile=body.profile, project_id=body.project_id,
-                                  private=body.private, source="console", attachments=atts)
+                                  private=body.private, source="console", attachments=atts, mode=body.mode, options=body.options)
         except KeyError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except Halted as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get("/v1/h/tasks/{tid}", dependencies=deps)
     def task(tid: str):
@@ -143,6 +189,189 @@ def mount(app: FastAPI, h: Harness, auth, hooks: dict | None = None, pairing: Pa
     @app.post("/v1/h/tasks/{tid}/cancel", dependencies=deps)
     def cancel(tid: str):
         return {"ok": h.tasks.cancel(tid)}
+
+    @app.post("/v1/h/tasks/{tid}/pause", dependencies=deps)
+    def pause(tid: str):
+        return {"ok": h.tasks.pause(tid)}
+
+    @app.post("/v1/h/tasks/{tid}/resume", dependencies=deps)
+    def resume(tid: str):
+        return {"ok": h.tasks.resume(tid)}
+
+    @app.get("/v1/h/tasks/{tid}/stream", dependencies=deps)
+    def stream(tid: str, after: int = 0, wait_seconds: float = 600):
+        """Server-sent events: each task event as it happens, until the task ends or the wait runs out."""
+        if not h.store.task(tid):
+            raise HTTPException(404, "no such task")
+
+        def gen():
+            last, deadline = after, time.monotonic() + wait_seconds
+            while True:
+                for e in h.store.events(tid, last):
+                    last = e["id"]
+                    yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {json.dumps(e, default=str)}\n\n"
+                state = h.store.task(tid)["state"]
+                if state in ("done", "failed", "cancelled") or time.monotonic() > deadline:
+                    yield f"event: end\ndata: {json.dumps({'state': state})}\n\n"
+                    return
+                time.sleep(1)
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.get("/v1/h/questions", dependencies=deps)
+    def questions(task_id: str | None = None):
+        return h.store.questions("open", task_id)
+
+    @app.post("/v1/h/questions/{qid}", dependencies=deps)
+    def answer(qid: str, body: TextIn):
+        if not h.tasks.answer(qid, body.text):
+            raise HTTPException(404, "no open question with that id")
+        return {"ok": True}
+
+    @app.post("/v1/h/halt", dependencies=deps)
+    def halt():
+        """Emergency stop: cancels every running task and refuses new ones until resumed."""
+        return {"cancelled": h.tasks.halt("owner"), "halted": True}
+
+    @app.post("/v1/h/resume-all", dependencies=deps)
+    def resume_all():
+        h.tasks.resume_all("owner")
+        return {"halted": False}
+
+    @app.post("/v1/h/feedback", dependencies=deps)
+    def feedback(body: FeedbackIn):
+        profile = body.profile
+        if profile is None and body.task_id and (t := h.store.task(body.task_id)):
+            profile = t["profile"]
+        if profile is None and body.session_id and (s := h.store.session(body.session_id)):
+            profile = s["profile"]
+        return {"id": h.store.add_feedback(body.rating, body.note, body.task_id, body.session_id, profile)}
+
+    @app.get("/v1/h/search", dependencies=deps)
+    def search_chats(q: str):
+        return h.store.search_messages(q)
+
+    @app.post("/v1/h/sessions/{sid}/fork", dependencies=deps)
+    def fork(sid: str, body: ForkIn):
+        try:
+            return h.store.fork_session(sid, body.upto_message_id, body.title)
+        except KeyError as exc:
+            raise HTTPException(404, "no such session") from exc
+
+    def need_recall():
+        if h.recall is None:
+            raise HTTPException(404, "long-term memory is off")
+        return h.recall
+
+    @app.get("/v1/h/memory", dependencies=deps)
+    def memory_search(q: str, k: int = 10, project_id: str | None = None):
+        return [m.public() for m in need_recall().search(q, k, project_id=project_id, touch=False)]
+
+    @app.delete("/v1/h/memory/{mid}", dependencies=deps)
+    def memory_forget(mid: int):
+        if not need_recall().forget(mid):
+            raise HTTPException(404, "no such memory")
+        return {"archived": mid}
+
+    @app.get("/v1/h/memory/events", dependencies=deps)
+    def memory_events(memory_id: int | None = None):
+        return need_recall().backend.events(memory_id)
+
+    @app.get("/v1/h/memory/stats", dependencies=deps)
+    def memory_stats():
+        return need_recall().backend.stats()
+
+    @app.post("/v1/h/memory/knowledge", dependencies=deps)
+    def memory_knowledge(body: KnowledgeIn):
+        ids = need_recall().learn(body.text, source=f"doc:{body.title[:80]}", project_id=body.project_id, private=body.private)
+        return {"chunks": len(ids), "ids": ids}
+
+    @app.post("/v1/h/memory/sleep", dependencies=deps)
+    def memory_sleep(allow_cloud: bool = False):
+        """Run the nightly consolidation now. Private memories stay on local models either way."""
+        report = Sleep(need_recall(), h.router, allow_cloud=allow_cloud).run()
+        return report.__dict__
+
+    @app.get("/v1/h/metrics", dependencies=deps)
+    def metrics():
+        by_state = {}
+        for t in h.store.tasks(limit=10_000):
+            by_state[t["state"]] = by_state.get(t["state"], 0) + 1
+        return {"tasks": by_state, "halted": h.tasks.halted, "open_questions": len(h.store.questions("open")),
+                "providers": h.router.status(),
+                "spend_month_cad": round(h.router.spend.month(), 2) if h.router.spend else None,
+                "memory": h.recall.backend.stats() if h.recall is not None else None}
+
+    # Routines: Alexa Routines and Shortcuts automations -------------------------------------------
+
+    def need_routines():
+        if h.routines is None:
+            raise HTTPException(404, "routines are off")
+        return h.routines
+
+    def now():
+        return datetime.now().astimezone()
+
+    @app.get("/v1/h/routines", dependencies=deps)
+    def routines():
+        return [{**r, "summary": describe(r)} for r in need_routines().list()]
+
+    @app.post("/v1/h/routines", dependencies=deps)
+    def create_routine(body: dict):
+        try:
+            return need_routines().add(body, created_by="owner")
+        except RoutineError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.put("/v1/h/routines/{rid}", dependencies=deps)
+    def update_routine(rid: str, body: dict):
+        try:
+            return need_routines().update(rid, body)
+        except KeyError as exc:
+            raise HTTPException(404, "no such routine") from exc
+        except RoutineError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.delete("/v1/h/routines/{rid}", dependencies=deps)
+    def delete_routine(rid: str):
+        if not need_routines().delete(rid):
+            raise HTTPException(404, "no such routine")
+        return {"deleted": rid}
+
+    @app.post("/v1/h/routines/{rid}/enable", dependencies=deps)
+    def enable_routine(rid: str, on: bool = True):
+        if not need_routines().set_enabled(rid, on, by="owner"):
+            raise HTTPException(404, "no such routine")
+        return need_routines().get(rid)
+
+    @app.post("/v1/h/routines/{rid}/run", dependencies=deps)
+    def run_routine(rid: str, dry_run: bool = False, body: dict | None = None):
+        """The app's button, a widget, or an iPhone Shortcut ("Get contents of URL" over Tailscale)."""
+        r = need_routines().get(rid) or need_routines().by_name(rid)
+        if r is None:
+            raise HTTPException(404, "no such routine")
+        if not r["enabled"] and not dry_run:
+            raise HTTPException(409, "that routine is switched off")
+        run = need_routines().run(r["id"], {"type": "manual"}, now=now(), dry_run=dry_run, vars=(body or {}).get("vars"))
+        return {"id": run.id, "state": run.state, "said": run.spoken, "steps": run.steps, "vars": run.vars}
+
+    @app.get("/v1/h/routines/{rid}/runs", dependencies=deps)
+    def routine_runs(rid: str):
+        return need_routines().runs(rid)
+
+    @app.post("/v1/h/routines/events", dependencies=deps)
+    def routine_event(body: RoutineEventIn):
+        """HA pushes state changes and events here (a rest_command in an automation) for instant triggers."""
+        eng = need_routines()
+        if body.event_type == "state_changed" and body.entity_id and body.new_state is not None:
+            runs = eng.on_state(body.entity_id, body.new_state, now(), old=body.old_state)
+        else:
+            runs = eng.on_event(body.event_type, body.data, now())
+        return {"ran": [{"routine": r.routine_id, "state": r.state} for r in runs]}
+
+    @app.post("/v1/h/routines/webhook/{name}", dependencies=deps)
+    def routine_webhook(name: str, body: dict | None = None):
+        runs = need_routines().on_event(f"webhook:{name}", body or {}, now())
+        return {"ran": [{"routine": r.routine_id, "state": r.state} for r in runs]}
 
     @app.get("/v1/h/artifacts", dependencies=deps)
     def artifacts(task_id: str | None = None):

@@ -49,10 +49,15 @@ class Profile:
 
 
 DEFAULT = Profile("assistant")
+# Home Assistant's voice pipeline and the speakers: short spoken answers on the fast chain.
+VOICE = Profile("voice", max_iterations=8, persona=(
+    "Answers are spoken aloud: one or two short sentences unless asked for more, no markdown, lists, emoji or URLs. "
+    "Metric units, Celsius, Canadian dollars, 12-hour times. The room a request comes from is the default target. "
+    "If an action is waiting for approval, say so instead of claiming it is done."))
 
 
 def load_profiles(config: dict) -> dict[str, Profile]:
-    out = {"assistant": DEFAULT}
+    out = {"assistant": DEFAULT, "voice": VOICE}
     for name, p in (config or {}).items():
         tools = p.get("tools") or {}
         out[name] = Profile(

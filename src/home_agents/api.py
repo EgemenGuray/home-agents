@@ -20,6 +20,7 @@ from .approvals import ApprovalError, Approvals
 from .audit import AuditLog
 from .broker import BrokerError, CredentialBroker
 from .db import connect
+from .harness.router import NoModelAvailable
 from .localllm import LocalModel
 from .memory import Memory
 from .models import Spend, SpendExceeded
@@ -90,6 +91,22 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
 
     @app.post("/v1/converse", dependencies=[Depends(auth)])
     def converse(body: ConverseIn):
+        h = getattr(app.state, "harness", None)
+        if h is not None and h.converse_enabled:
+            try:
+                cid, r = h.converse(body.text, body.conversation_id, channel=body.channel, room=body.room)
+            except SpendExceeded as exc:
+                return {"text": f"I've reached this month's spending cap, so I can only do simple commands. ({exc})",
+                        "conversation_id": body.conversation_id}
+            except NoModelAvailable:
+                audit.record("model_unreachable", "harness", {})
+                return {"text": CLOUD_DOWN, "conversation_id": body.conversation_id, "degraded": True}
+            except Exception as exc:  # same promise as below: the speaker never goes silent on a 500
+                if not _model_unreachable(exc):
+                    raise
+                audit.record("model_unreachable", "harness", {"error": type(exc).__name__})
+                return {"text": CLOUD_DOWN, "conversation_id": body.conversation_id, "degraded": True}
+            return {"text": r.text, "conversation_id": cid, "pending_approvals": r.pending_approvals}
         try:
             r = agent.converse(body.text, body.conversation_id, channel=body.channel, room=body.room)
         except SpendExceeded as exc:
@@ -137,8 +154,8 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
     def search_audit(q: str = "", kind: str | None = None):
         return audit.search(q, kind)
 
-    # The harness (E1.12): any model, sessions, projects, tasks, skills, MCP, channels and the console.
-    if harness_config is None and Path(settings.harness_file).exists():
+    # The harness (E1.12): any model, sessions, projects, tasks, coding, crews, memory, skills, MCP, channels, console.
+    if harness_config is None and Path(settings.harness_file).is_file():
         harness_config = yaml.safe_load(Path(settings.harness_file).read_text()) or {}
     if harness_config is not None:
         from .harness import build_harness
@@ -146,16 +163,20 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
         from .harness.channels import Pairing
         from .harness.mcp_tools import load_mcp_tools
 
+        from .harness import daemon
+
         mcp = load_mcp_tools(harness_config.get("mcp", {})) if harness_config.get("mcp") else []
+        notify = daemon.phone_notifier(ha, (harness_config.get("notify") or {}).get("service"))
+        code_ws = daemon.code_workspaces(harness_config.get("coding") or {}) if start_workers else None
         harness = build_harness(harness_config, conn=conn, data_dir=settings.data_dir, audit=audit, memory=memory,
                                 spend=spend, approvals=approvals, base_tools=tools, anthropic_client=client,
-                                providers=providers, extra_tools=mcp, start_workers=start_workers)
+                                providers=providers, extra_tools=mcp, start_workers=start_workers, notify=notify,
+                                code_workspaces=code_ws)
         pairing = Pairing(set((harness_config.get("channels") or {}).get("allowed", [])))
         mount(app, harness, auth, harness_config.get("hooks"), pairing)
         if start_workers:
-            from .harness import daemon
-            notify = daemon.phone_notifier(ha, (harness_config.get("notify") or {}).get("service"))
-            app.state.harness_stop = daemon.start(harness, harness_config, pairing, notify)
+            app.state.harness_stop = daemon.start(harness, harness_config, pairing, notify, ha)
+        harness.converse_enabled = bool(harness_config.get("voice_through_harness", True))
         app.state.harness = harness
         app.state.pairing = pairing
 

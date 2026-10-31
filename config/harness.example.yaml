@@ -1,13 +1,16 @@
-# Copy to config/harness.yaml on the Studio (or the hub Mac in Phase 1). No secrets here: only the
-# names of environment variables that hold keys, set in the ignored .env file.
+# Copy to config/harness.yaml. No secrets here: only the names of environment variables that hold
+# keys, set in the ignored .env file. Two setups (docs/harness.md, "Two setups"):
+#   Mac mini only         cloud models; keep the local providers and the `private` chain unused
+#   Mac mini + Mac Studio local models on the Studio; private chats, tasks and memory stay local
 
 providers:
   claude:     {type: anthropic, location: cloud}                     # ANTHROPIC_API_KEY
   openai:     {type: openai, base_url: "https://api.openai.com/v1", api_key_env: OPENAI_API_KEY, location: cloud}
   gemini:     {type: openai, base_url: "https://generativelanguage.googleapis.com/v1beta/openai", api_key_env: GEMINI_API_KEY, location: cloud}
   openrouter: {type: openai, base_url: "https://openrouter.ai/api/v1", api_key_env: OPENROUTER_API_KEY, location: cloud}
-  # Local servers run natively on the Studio (Metal), bound to 127.0.0.1; the agent container
-  # reaches them as host.docker.internal. All speak the OpenAI chat API.
+  # Mac mini + Mac Studio: local servers run natively on the Studio (Metal), bound to 127.0.0.1; the agent
+  # container reaches them as host.docker.internal. All speak the OpenAI chat API.
+  # Mac mini only: delete these, except ollama if it serves the small embedding model below.
   ollama:     {type: openai, base_url: "http://host.docker.internal:11434/v1", location: local}
   mlx:        {type: openai, base_url: "http://host.docker.internal:8080/v1", location: local}    # mlx_lm.server (launchd/)
   llamacpp:   {type: openai, base_url: "http://host.docker.internal:8081/v1", location: local}   # llama-server
@@ -19,7 +22,8 @@ models:
   fast:     ["claude:claude-haiku-5-5", "ollama:<small-local-model>"]
   default:  ["claude:claude-sonnet-5-5", "openai:<openai-model>", "mlx:<local-model>"]
   planning: ["claude:claude-opus-5-5", "openai:<openai-model>", "mlx:<local-model>"]
-  private:  ["mlx:<local-model>", "ollama:<local-model>"]
+  private:  ["mlx:<local-model>", "ollama:<local-model>"]     # Mac mini only: leave it out; private requests then refuse
+  advisor:  ["openai:<openai-model>", "claude:claude-opus-5-5"]  # second_opinion: a different model family reviews
 
 # USD per million tokens (input, output) for non-Claude cloud models, so the CAD cap counts them.
 prices_usd:
@@ -43,6 +47,14 @@ profiles:
     model: fast
     private: true
     tools: {allow: []}
+  voice:                     # HA Assist and the app's Assistant tab (/v1/converse) when voice_through_harness is on
+    model: fast
+    max_iterations: 8
+    persona: "Answers are spoken aloud: one or two short sentences, no markdown, lists or URLs. Metric, Celsius, CAD, 12-hour times."
+    tools: {allow: ["ha_*", "web_*", "recall_memory", "save_memory", "remember_fact", "run_routine", "list_routines", "create_routine"]}
+
+# Voice from Home Assistant goes through the harness (models, memory, hooks, routines). false = the older Claude-only agent.
+voice_through_harness: true
 
 skills_dir: skills
 task_workers: 2
@@ -74,6 +86,61 @@ hooks:
 heartbeat:
   every_minutes: 30
   checklist: config/HEARTBEAT.md
+
+# Long-term memory: everything said and done, recalled by meaning and words, consolidated nightly.
+#   Mac mini only         memory-db (Postgres + pgvector) in deploy/hub/compose.yaml; embeddings from a small
+#                         model in Ollama on the mini (about 0.3 GB of RAM). Sleep may use a cloud model for
+#                         non-private memories (allow_cloud); private ones wait for a local model.
+#   Mac mini + Mac Studio memory-db on the Studio; embeddings and sleep run on local models, nothing leaves.
+# Without `backend: pgvector` memory uses the service's SQLite file (full-text plus brute-force vectors).
+memory:
+  backend: pgvector
+  dsn_env: HOME_AGENTS_PG_DSN
+  embeddings: {base_url: "http://host.docker.internal:11434/v1", model: nomic-embed-text, dim: 768, location: local}
+  sleep:
+    at: "03:30"
+    model: private
+    allow_cloud: false       # Mac mini only: true to distill non-private memories with the `fast` chain
+    cloud_model: fast
+
+# Routines: Alexa Routines and iPhone Shortcuts automations (docs/routines.md). Device-only routines that must
+# work with the agent down belong in Home Assistant instead.
+routines:
+  profile: assistant         # whose tool stances apply to device steps
+  location: {latitude: 0.0, longitude: 0.0}   # for sunrise and sunset; set on the machine, never commit the real one
+  say: {domain: script, service: announce}    # how "say" reaches a speaker
+  poll_seconds: 10           # HA state polling for device, sensor and presence triggers
+  defaults:
+    - name: Good night
+      triggers: [{type: phrase, phrases: ["good night"]}, {type: time, at: "23:30", days: daily}]
+      conditions: [{type: someone_home}]
+      steps:
+        - {device: {domain: script, service: good_night}}
+        - {say: "Good night. Everything is locked up."}
+
+# Coding tasks (Codex, Claude Code): a sandbox container and a branch per task. Needs Docker workspaces:
+#   Mac mini only         on the rented workspace VM; Mac mini + Mac Studio on the Studio.
+coding:
+  enabled: false
+  route: home
+
+# Crews and flows (CrewAI): run with `home-agent task "..." --mode crew --crew trip-plan`.
+crews:
+  trip-plan:
+    process: sequential
+    agents:
+      researcher: {role: Travel researcher, goal: Find options that fit the dates and budget, profile: researcher}
+      planner:    {role: Planner, goal: Turn options into a day-by-day plan, profile: assistant}
+    tasks:
+      - {name: options, agent: researcher, description: "Find 3 options for {request}", expected_output: "3 options with prices in CAD",
+         guardrail: {must_include: [CAD]}}
+      - {name: plan, agent: planner, description: "Make the plan", context: [options], human_input: true}
+flows: {}
+
+# Event hooks (Claude Code and Kiro hooks): rules on tool_before, tool_after, task_done, task_failed, memory_sleep.
+event_hooks:
+  - {on: tool_before, match: {tool: ha_call_service, input_contains: oven}, do: ask}
+  - {on: task_failed, do: notify, message: "Task failed: {title}"}
 
 # Where unprompted messages go: Home Assistant's notify service for the phone app.
 notify:

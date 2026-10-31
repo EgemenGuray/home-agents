@@ -7,6 +7,17 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    services:
+      # Long-term memory tests also run against real Postgres + pgvector (tests/test_memory.py).
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: harness_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      HOME_AGENTS_TEST_PG: postgresql://postgres@127.0.0.1:5432/harness_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
