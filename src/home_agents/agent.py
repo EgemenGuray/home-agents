@@ -17,6 +17,7 @@ import anthropic
 from .audit import AuditLog
 from .memory import Memory
 from .models import LOCAL, OPUS, SONNET, Purpose, Spend, choose_model
+from .rooms import RoomContext
 from .tools import ToolRegistry, result_text
 
 SYSTEM_PROMPT = """You are the voice of our home and its one assistant. You control the house through \
@@ -67,16 +68,19 @@ class Agent:
         self.token_budget = token_budget
         self.max_iterations = max_iterations
 
-    def _system(self, room: str | None, channel: str) -> list[dict]:
+    def _system(self, room: str | None, channel: str, ctx: RoomContext | None = None) -> list[dict]:
         # Stable prompt first (cached); per-request context after the breakpoint.
+        rooms = ctx.prompt() if ctx else ""
         return [
             {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": f"Household facts:\n{self.memory.facts_prompt()}\n\n"
-                                     f"This request came from: {channel}" + (f", room {room}." if room else ".")},
+                                     + (f"{rooms}\n\n" if rooms else "")
+                                     + f"This request came from: {channel}" + (f", room {room}." if room else ".")},
         ]
 
     def converse(self, text: str, conversation_id: str | None = None, *, channel: str = "voice",
-                 room: str | None = None, purpose: Purpose = Purpose.DEFAULT, job_id: str | None = None) -> Reply:
+                 room: str | None = None, purpose: Purpose = Purpose.DEFAULT, job_id: str | None = None,
+                 room_context: RoomContext | None = None) -> Reply:
         conversation_id = conversation_id or f"conv-{uuid.uuid4().hex[:12]}"
         local_ok = self.local is not None and self.local.available()
         route = choose_model(purpose, text, local_available=local_ok)
@@ -85,7 +89,7 @@ class Agent:
         model = route.model if route.model in (SONNET, OPUS) else SONNET
         self.spend.check_before_call()
         try:
-            return self._cloud(text, conversation_id, channel, room, model, job_id)
+            return self._cloud(text, conversation_id, channel, room, model, job_id, room_context)
         except (anthropic.APIConnectionError, anthropic.InternalServerError, anthropic.APITimeoutError):
             if local_ok:  # S2.3.2: internet or API down, answer locally
                 return self._local(text, conversation_id, channel, room, "cloud unavailable, local fallback", record_user=False)
@@ -100,7 +104,7 @@ class Agent:
         self.audit.record("local_model", "agent", {"reason": reason})
         return Reply(answer, conversation_id, LOCAL, tin, tout)
 
-    def _cloud(self, text, conversation_id, channel, room, model, job_id) -> Reply:
+    def _cloud(self, text, conversation_id, channel, room, model, job_id, ctx: RoomContext | None = None) -> Reply:
         messages = self.memory.history(conversation_id) + [{"role": "user", "content": text}]
         self.memory.add_turn(conversation_id, "user", text, channel, room)
         tools = self.tools.definitions() + [WEB_SEARCH]
@@ -113,7 +117,7 @@ class Agent:
             response = self.client.beta.messages.create(
                 model=model,
                 max_tokens=4096 if channel == "voice" else 16000,
-                system=self._system(room, channel),
+                system=self._system(room, channel, ctx),
                 messages=messages,
                 tools=tools,
                 output_config={"effort": "low" if channel == "voice" else "medium"},
@@ -139,18 +143,24 @@ class Agent:
             for block in response.content:
                 if block.type != "tool_use":
                     continue
-                results.append(self._run_tool(block, job_id, conversation_id, pending, channel, room))
+                results.append(self._run_tool(block, job_id, conversation_id, pending, channel, room, ctx))
             messages.append({"role": "user", "content": results})
 
         answer = _final_text(response)
         self.memory.add_turn(conversation_id, "assistant", answer, channel, room)
         return Reply(answer, conversation_id, model, used_in, used_out, pending)
 
-    def _run_tool(self, block, job_id, conversation_id, pending, channel="voice", room=None) -> dict:
+    def _run_tool(self, block, job_id, conversation_id, pending, channel="voice", room=None, ctx=None) -> dict:
         tool = self.tools.get(block.name)
+        if tool is not None and ctx is not None and block.name == "ha_call_service":
+            tool = ctx.wrap(tool)
         inp = dict(block.input) if isinstance(block.input, dict) else {}
         if tool is None:
             return {"type": "tool_result", "tool_use_id": block.id, "is_error": True, "content": f"unknown tool {block.name}"}
+        try:
+            inp = tool.prepared(inp)
+        except ValueError as exc:  # e.g. no such device in this room: the model asks instead
+            return {"type": "tool_result", "tool_use_id": block.id, "is_error": True, "content": str(exc)[:500]}
         if tool.needs_approval(inp):
             if self.approvals is None:
                 content = "This action needs the owner's approval, and approvals are not set up yet. Do not retry."

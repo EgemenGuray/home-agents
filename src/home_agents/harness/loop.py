@@ -220,21 +220,25 @@ class HarnessAgent:
         tool = tools.get(call.name)
         if tool is None:
             return f"unknown or blocked tool {call.name}", True
-        verdict = self.events.before_tool(call.name, call.input, profile.name) if self.events else None
+        try:
+            inp = tool.prepared(call.input)
+        except ValueError as exc:  # e.g. no such device in this room: the model asks instead
+            return str(exc)[:500], True
+        verdict = self.events.before_tool(call.name, inp, profile.name) if self.events else None
         if verdict == "block":
             self.audit.record("tool_blocked_by_hook", "harness", {"tool": call.name}, job_id)
             return "A household rule blocks this action. Do not retry it.", False
-        if tool.needs_approval(call.input) or verdict == "ask":
+        if tool.needs_approval(inp) or verdict == "ask":
             if self.approvals is None:
-                self.audit.record("tool_blocked_pending_approval", "harness", {"tool": call.name, "input": call.input}, job_id)
+                self.audit.record("tool_blocked_pending_approval", "harness", {"tool": call.name, "input": inp}, job_id)
                 return "This action needs the owner's approval, and approvals are not set up yet. Do not retry.", False
             # A chat turn (voice, app) has already answered by the time you approve, so the approval itself runs
             # the tool and reports back. A task waits instead and runs it in its own loop.
             on_approve = None if hooks.wait_for_approval else \
-                (lambda _req, t=tool, i=dict(call.input): self._run_approved(t, i, job_id, channel))
-            req = self.approvals.request(kind="tool", summary=f"{call.name} {call.input}",
-                                         payload={"tool": call.name, "input": call.input}, job_id=job_id, on_approve=on_approve)
-            self.audit.record("tool_blocked_pending_approval", "harness", {"tool": call.name, "input": call.input}, job_id)
+                (lambda _req, t=tool, i=dict(inp): self._run_approved(t, i, job_id, channel))
+            req = self.approvals.request(kind="tool", summary=f"{call.name} {inp}",
+                                         payload={"tool": call.name, "input": inp}, job_id=job_id, on_approve=on_approve)
+            self.audit.record("tool_blocked_pending_approval", "harness", {"tool": call.name, "input": inp}, job_id)
             hooks.on_event("approval", {"id": req.id, "tool": call.name})
             if not hooks.wait_for_approval:
                 out.pending_approvals.append(req.id)
@@ -243,11 +247,11 @@ class HarnessAgent:
             if state != "approved":
                 return f"The owner did not approve this ({state}). Do not retry; continue without it or stop.", False
         try:
-            value = tool.handler(call.input)
-            self.audit.record("tool_call", "harness", {"tool": call.name, "input": call.input}, job_id)
+            value = tool.handler(inp)
+            self.audit.record("tool_call", "harness", {"tool": call.name, "input": inp}, job_id)
             text = result_text(value)
             if self.events:
-                self.events.after_tool(call.name, call.input, text, profile.name)
+                self.events.after_tool(call.name, inp, text, profile.name)
             return text, False
         except Cancelled:
             raise

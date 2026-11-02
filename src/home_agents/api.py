@@ -24,6 +24,7 @@ from .harness.router import NoModelAvailable
 from .localllm import LocalModel
 from .memory import Memory
 from .models import Spend, SpendExceeded
+from .rooms import RoomContext
 from .settings import Settings
 from .tools import HomeAssistant, ToolRegistry, memory_tools
 
@@ -37,6 +38,9 @@ class ConverseIn(BaseModel):
     conversation_id: str | None = None
     channel: str = "voice"
     room: str | None = None
+    floor: str | None = None
+    # Exposed devices with their rooms, from the HA integration: [{entity_id, name, area, aliases, members, here}]
+    devices: list[dict] | None = None
 
 
 class DecisionIn(BaseModel):
@@ -94,7 +98,8 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
         h = getattr(app.state, "harness", None)
         if h is not None and h.converse_enabled:
             try:
-                cid, r = h.converse(body.text, body.conversation_id, channel=body.channel, room=body.room)
+                cid, r = h.converse(body.text, body.conversation_id, channel=body.channel, room=body.room,
+                                    floor=body.floor, devices=body.devices)
             except SpendExceeded as exc:
                 return {"text": f"I've reached this month's spending cap, so I can only do simple commands. ({exc})",
                         "conversation_id": body.conversation_id}
@@ -108,7 +113,8 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
                 return {"text": CLOUD_DOWN, "conversation_id": body.conversation_id, "degraded": True}
             return {"text": r.text, "conversation_id": cid, "pending_approvals": r.pending_approvals}
         try:
-            r = agent.converse(body.text, body.conversation_id, channel=body.channel, room=body.room)
+            r = agent.converse(body.text, body.conversation_id, channel=body.channel, room=body.room,
+                               room_context=RoomContext.from_request(body.room, body.floor, body.devices))
         except SpendExceeded as exc:
             return {"text": f"I've reached this month's spending cap, so I can only do simple commands. ({exc})",
                     "conversation_id": body.conversation_id}

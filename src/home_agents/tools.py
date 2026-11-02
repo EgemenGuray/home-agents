@@ -25,6 +25,12 @@ class Tool:
     handler: Callable[[dict], Any]
     needs_approval: Callable[[dict], bool] = field(default=lambda _input: False)
     strict: bool = False  # only for schemas with no free-form objects
+    # Fills in the input before the approval check and the call (rooms.py: this room as the default target).
+    # Raises ValueError to send the model an error instead of running.
+    prepare: Callable[[dict], dict] | None = None
+
+    def prepared(self, inp: dict) -> dict:
+        return self.prepare(inp) if self.prepare else inp
 
     def definition(self) -> dict:
         d = {"name": self.name, "description": self.description, "input_schema": self.input_schema}
@@ -52,7 +58,7 @@ class ToolRegistry:
 def _ha_needs_approval(inp: dict) -> bool:
     if inp.get("domain") in APPROVAL_DOMAINS:
         return True
-    targets = " ".join(str(v) for v in (inp.get("entity_id"), inp.get("area_id")) if v)
+    targets = " ".join(str(v) for v in (inp.get("entity_id"), inp.get("area_id"), inp.get("label_id")) if v)
     return any(h in targets for h in APPROVAL_ENTITY_HINTS) and inp.get("domain") == "cover"
 
 
@@ -65,7 +71,7 @@ class HomeAssistant:
 
     def call_service(self, inp: dict) -> dict:
         data = dict(inp.get("data") or {})
-        for key in ("entity_id", "area_id"):
+        for key in ("entity_id", "area_id", "floor_id", "label_id"):
             if inp.get(key):
                 data[key] = inp[key]
         r = self.http.post(f"{self.url}/api/services/{inp['domain']}/{inp['service']}", json=data)
@@ -98,7 +104,8 @@ class HomeAssistant:
         return [
             Tool(
                 "ha_call_service",
-                "Control a device or run a script or scene in Home Assistant, e.g. light.turn_on for an area.",
+                "Control a device or run a script or scene in Home Assistant. Target an entity (a device or a group), "
+                "an area (a room), a floor or a label; with no target, a device command acts on the room you were asked from.",
                 {
                     "type": "object",
                     "properties": {
@@ -106,6 +113,8 @@ class HomeAssistant:
                         "service": {"type": "string"},
                         "entity_id": {"type": "string"},
                         "area_id": {"type": "string"},
+                        "floor_id": {"type": "string"},
+                        "label_id": {"type": "string"},
                         "data": {"type": "object", "additionalProperties": True},
                     },
                     "required": ["domain", "service"],

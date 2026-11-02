@@ -15,13 +15,15 @@ from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
+from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_LOCAL_FIRST, CONF_TOKEN, CONF_URL
-from .logic import TOO_SLOW, UNREACHABLE, keep_listening, local_handled, timeout_for
+from .logic import TOO_SLOW, UNREACHABLE, device_row, house_devices, keep_listening, local_handled, timeout_for
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -40,14 +42,30 @@ class HomeAgentEntity(conversation.ConversationEntity):
     def supported_languages(self) -> list[str] | Literal["*"]:
         return "*"
 
-    def _room(self, device_id: str | None) -> str | None:
+    def _room(self, device_id: str | None) -> tuple[str | None, str | None]:
+        """The speaker's area and floor ids."""
         if not device_id:
-            return None
+            return None, None
         device = dr.async_get(self.hass).async_get(device_id)
         if device is None or device.area_id is None:
-            return None
+            return None, None
         area = ar.async_get(self.hass).async_get_area(device.area_id)
-        return area.id if area else None
+        return (area.id, area.floor_id) if area else (None, None)
+
+    def _devices(self, device_id: str | None, room: str | None) -> list[dict]:
+        """Everything exposed to Assist, with its room, so the agent can tell this room's TV from the others."""
+        ents, devs = er.async_get(self.hass), dr.async_get(self.hass)
+        rows = []
+        for state in self.hass.states.async_all():
+            if not async_should_expose(self.hass, conversation.DOMAIN, state.entity_id):
+                continue
+            entry = ents.async_get(state.entity_id)
+            device = devs.async_get(entry.device_id) if entry and entry.device_id else None
+            rows.append(device_row(
+                state.entity_id, state.name, entry.area_id if entry else None, device.area_id if device else None,
+                aliases=entry.aliases if entry else (), members=state.attributes.get("entity_id"),
+                here=bool(device_id and device and device.id == device_id)))
+        return house_devices(rows, room)
 
     async def _local(self, user_input: conversation.ConversationInput) -> conversation.ConversationResult | None:
         if not self.entry.data.get(CONF_LOCAL_FIRST, True):
@@ -69,11 +87,14 @@ class HomeAgentEntity(conversation.ConversationEntity):
 
         session = async_get_clientsession(self.hass)
         channel = "voice" if user_input.device_id else "app"
+        room, floor = self._room(user_input.device_id)
         payload = {
             "text": user_input.text,
             "conversation_id": user_input.conversation_id,
             "channel": channel,
-            "room": self._room(user_input.device_id),
+            "room": room,
+            "floor": floor,
+            "devices": self._devices(user_input.device_id, room),
         }
         response = intent.IntentResponse(language=user_input.language)
         conversation_id = user_input.conversation_id
