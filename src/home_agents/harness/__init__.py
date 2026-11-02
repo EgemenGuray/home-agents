@@ -15,6 +15,7 @@ from ..approvals import Approvals
 from ..audit import AuditLog
 from ..memory import Memory
 from ..models import Spend
+from ..rooms import RoomContext
 from ..tools import Tool, ToolRegistry
 from .crews import CrewRunner
 from .hooks import EventHooks
@@ -47,19 +48,22 @@ class Harness:
     converse_enabled: bool = True
     routines: RoutineEngine | None = None
 
-    def converse(self, text: str, conversation_id: str | None, *, channel: str = "voice", room: str | None = None) -> tuple[str, RunResult]:
+    def converse(self, text: str, conversation_id: str | None, *, channel: str = "voice", room: str | None = None,
+                 floor: str | None = None, devices: list[dict] | None = None) -> tuple[str, RunResult]:
         """Home Assistant's conversation agent and the app's Assistant tab (`/v1/converse`) come through here,
-        so voice gets the same models, memory, hooks and approvals as everything else."""
+        so voice gets the same models, memory, hooks and approvals as everything else. The room and the
+        house's devices make "turn off the TV" mean this room's TV (rooms.py)."""
         key = f"{channel}:{conversation_id}" if conversation_id else None
         profile = "voice" if channel == "voice" and "voice" in self.profiles else "assistant"
         session = self.store.session_for(key, profile) if key else None
         where = f"{channel} in the {room}" if room else channel
-        session, r = self.chat(session["id"] if session else None, text, profile=profile, channel=where)
+        session, r = self.chat(session["id"] if session else None, text, profile=profile, channel=where,
+                               room_context=RoomContext.from_request(room, floor, devices))
         return conversation_id or session["id"], r
 
     def chat(self, session_id: str | None, text: str, *, profile: str | None = None, project_id: str | None = None,
              private: bool | None = None, channel: str = "console", model: str | None = None,
-             temporary: bool = False) -> tuple[dict | None, RunResult]:
+             temporary: bool = False, room_context: RoomContext | None = None) -> tuple[dict | None, RunResult]:
         """One chat turn. `temporary` is the Claude app's temporary chat: nothing is stored or remembered.
         A routine's phrase ("good night") runs that routine straight away, without a model."""
         if self.routines is not None and (hit := self.routines.match_phrase(text)):
@@ -85,6 +89,10 @@ class Harness:
         elif self.recall is not None:
             memory = self.recall.prompt(text, project_id=project_id, include_private=True)
             extra = self.recall.tools(project_id)
+        if room_context is not None:
+            memory = "\n\n".join(p for p in (memory, room_context.prompt()) if p)
+            if (ha := self.agent.tools.get("ha_call_service")) is not None:
+                extra = [*extra, room_context.wrap(ha)]
         project = self.store.project(project_id) or {}
         if session:
             self.store.add_message(session["id"], "user", text, channel=channel)

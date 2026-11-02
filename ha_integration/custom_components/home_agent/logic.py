@@ -23,3 +23,28 @@ def local_handled(response_type: str, error_code: str | None) -> bool:
 def keep_listening(text: str) -> bool:
     """The assistant asked something back, so the speaker listens again without a second wake word."""
     return text.rstrip().endswith("?")
+
+
+# Room awareness: the agent gets the exposed devices with their rooms, so "turn off the TV" said in the
+# bedroom means the bedroom TV (home_agents/rooms.py). Capped so a big house doesn't bloat every request.
+MAX_DEVICES = 300
+
+
+def device_row(entity_id: str, name: str, entity_area: str | None, device_area: str | None,
+               aliases=(), members=None, here: bool = False) -> dict:
+    """One exposed entity for the agent. The entity's own area wins over its device's, as in HA."""
+    row = {"entity_id": entity_id, "name": name, "area": entity_area or device_area}
+    if aliases:
+        row["aliases"] = sorted(str(a) for a in aliases)
+    if isinstance(members, (list, tuple)) and members:
+        row["members"] = [str(m) for m in members]
+    if here:
+        row["here"] = True
+    return row
+
+
+def house_devices(rows: list[dict], room: str | None) -> list[dict]:
+    """This room first, then by room and entity id, so the list is stable and the cap drops far rooms."""
+    ordered = sorted(rows, key=lambda r: (r.get("area") != room or room is None, r.get("area") is None,
+                                          r.get("area") or "", r["entity_id"]))
+    return ordered[:MAX_DEVICES]
