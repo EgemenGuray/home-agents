@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agent screen</title>
+<style>
+  :root { --bg:#f7f7f5; --panel:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e4e3de; --primary:#2e8b57; --accent:#e0a100; --bad:#c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --panel:#1f1f1d; --ink:#ecebe6; --muted:#9a9993; --line:#33332f; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:1280px; margin:0 auto; padding:12px 16px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .btn { border:1px solid var(--line); background:var(--panel); color:var(--ink); padding:8px 14px; border-radius:10px; cursor:pointer; font:inherit; }
+  .btn.primary { background:var(--accent); color:#1d1d1b; border-color:var(--accent); }
+  .btn.stop { color:var(--bad); }
+  .muted { color:var(--muted); font-size:13px; }
+  input, select { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px; }
+  #banner { background:var(--panel); border-radius:20px; padding:10px 14px; margin:10px 0; box-shadow:0 1px 6px rgba(0,0,0,.08); }
+  #screen { position:relative; height:calc(100vh - 220px); min-height:280px; border-radius:20px; overflow:hidden; background:#000;
+            outline:3px solid transparent; transition:outline-color .3s, box-shadow .3s; touch-action:none; }
+  /* The edge glows while the agent drives, so you always know whose hand is on the pointer. */
+  #screen.agent { outline-color:var(--primary); box-shadow:0 0 24px 4px color-mix(in srgb, var(--primary) 55%, transparent); }
+  #screen.owner { outline-color:var(--accent); }
+  #screen.paused { outline-color:var(--muted); }
+  #hint { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); background:rgba(0,0,0,.65); color:#fff;
+          padding:6px 12px; border-radius:99px; font-size:13px; pointer-events:none; }
+</style>
+</head>
+<body>
+<main>
+  <div id="login" hidden class="row">
+    <span>Paste the service token. It stays in this browser tab only.</span>
+    <input id="token" type="password" size="36"><button class="btn primary" id="save">Connect</button>
+  </div>
+  <div class="row"><select id="pick"></select><span class="muted" id="conn"></span></div>
+  <div id="banner">
+    <div class="row"><b id="title">No screen</b><span class="muted" id="driver"></span><span style="flex:1"></span><span class="muted" id="elapsed"></span></div>
+    <div class="muted" id="actions"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn primary" id="take">Take over</button>
+      <button class="btn" id="pause">Pause</button>
+      <input id="note" placeholder="What you did (optional)" style="flex:1; min-width:160px">
+      <button class="btn" id="back">Hand back</button>
+      <button class="btn stop" id="stop">Stop task</button>
+    </div>
+  </div>
+  <div id="screen"><div id="hint" hidden></div></div>
+</main>
+<script type="module">
+import RFB from "/screen/novnc/core/rfb.js";
+
+const $ = (id) => document.getElementById(id);
+let token = ""; try { token = sessionStorage.getItem("ha_token") || ""; } catch (e) {}
+let ws = new URLSearchParams(location.search).get("ws") || "";
+let rfb = null, sock = null, status = null, renewTimer = null, pollTimer = null;
+
+async function api(path, body) {
+  const r = await fetch(path, { method: body === undefined ? "GET" : "POST", body: body === undefined ? undefined : JSON.stringify(body),
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" } });
+  if (r.status === 401) { $("login").hidden = false; throw new Error("token"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+function hint(text) { $("hint").textContent = text; $("hint").hidden = !text; }
+
+function connect(t) {
+  if (rfb) { rfb.disconnect(); rfb = null; }
+  if (!t.url) { $("conn").textContent = "Screen relay not configured"; return; }
+  // Our own WebSocket, so we can renew control on it in place with a text frame.
+  sock = new WebSocket(`${t.url}?ticket=${encodeURIComponent(t.ticket)}`, ["binary"]);
+  rfb = new RFB($("screen"), sock);
+  rfb.scaleViewport = true;
+  rfb.viewOnly = t.mode !== "control";
+  rfb.addEventListener("connect", () => $("conn").textContent = "Live");
+  rfb.addEventListener("disconnect", () => $("conn").textContent = "Disconnected");
+}
+
+function render(s) {
+  status = s;
+  $("title").textContent = s.title || s.workspace;
+  $("driver").textContent = { agent: "Agent is driving", you: "You are driving", nobody: "Paused" }[s.driver];
+  $("elapsed").textContent = `${Math.floor(s.seconds_in_state / 60)}:${String(s.seconds_in_state % 60).padStart(2, "0")}`;
+  $("actions").textContent = s.recent_actions.length ? "Last steps: " + s.recent_actions.join(", ") : "";
+  $("screen").className = s.state;
+  $("take").hidden = s.state === "owner";
+  $("pause").hidden = s.state === "paused";
+  $("back").hidden = $("note").hidden = s.state === "agent";
+  hint(s.state === "agent" ? "Touch the screen to take over" : "");
+}
+
+async function refresh() { if (ws) render(await api(`/v1/screens/${ws}`)); }
+
+async function take() {
+  const t = await api(`/v1/screens/${ws}/take`, {});
+  connect(t);
+  clearInterval(renewTimer);
+  renewTimer = setInterval(async () => {   // keep control while you drive; stops on hand back
+    const r = await api(`/v1/screens/${ws}/ticket`, { mode: "control" }).catch(() => null);
+    if (r && sock && sock.readyState === 1) sock.send(JSON.stringify({ ticket: r.ticket }));
+  }, 30000);
+  await refresh();
+}
+
+async function view() { clearInterval(renewTimer); connect(await api(`/v1/screens/${ws}/ticket`, { mode: "view" })); }
+
+$("screen").addEventListener("pointerdown", (e) => { if (status && status.state === "agent") { e.preventDefault(); take(); } }, true);
+$("take").onclick = take;
+$("pause").onclick = async () => { render(await api(`/v1/screens/${ws}/pause`, {})); await view(); };
+$("back").onclick = async () => { render(await api(`/v1/screens/${ws}/hand-back`, { text: $("note").value })); $("note").value = ""; await view(); };
+$("stop").onclick = async () => { if (status && status.job_id && confirm("Stop this task? The workspace closes and the log is kept.")) await api(`/v1/h/tasks/${status.job_id}/cancel`, {}); };
+$("save").onclick = () => { token = $("token").value.trim(); try { sessionStorage.setItem("ha_token", token); } catch (e) {} $("login").hidden = true; boot(); };
+$("pick").onchange = () => { ws = $("pick").value; history.replaceState(null, "", `?ws=${ws}`); boot(); };
+
+async function boot() {
+  if (!token) { $("login").hidden = false; return; }
+  const all = await api("/v1/screens");
+  $("pick").innerHTML = all.map(s => `<option value="${s.workspace}">${(s.title || s.workspace).replace(/</g, "&lt;")}</option>`).join("");
+  if (!ws && all.length) ws = all[0].workspace;
+  if (!ws) { $("title").textContent = "No agent has a screen open"; return; }
+  $("pick").value = ws;
+  await refresh();
+  if (status.state === "owner") await take(); else await view();
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => refresh().catch(() => {}), 2000);
+}
+boot().catch(e => $("conn").textContent = e.message);
+</script>
+</body>
+</html>

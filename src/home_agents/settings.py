@@ -26,6 +26,9 @@ class Settings:
     ha_token: str | None = field(default_factory=lambda: _env("HA_TOKEN"))
     # Local model server (Phase 2, on the Mac Studio): an HTTP endpoint for llama.cpp or MLX.
     local_llm_url: str | None = field(default_factory=lambda: _env("LOCAL_LLM_URL"))
+    # Screen relay on the workspace host (S1.6.1), its tailnet address as wss://<host>/ . The signing key is
+    # HOME_AGENTS_SCREEN_KEY (64 hex characters), read where it is used and set on the relay too.
+    screen_relay_url: str = field(default_factory=lambda: _env("SCREEN_RELAY_URL", "") or "")
     # Spend, in CAD.
     daily_alert_cad: float = field(default_factory=lambda: float(_env("DAILY_SPEND_ALERT_CAD", "5")))
     monthly_cap_cad: float = field(default_factory=lambda: float(_env("MONTHLY_SPEND_CAP_CAD", "70")))

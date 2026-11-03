@@ -12,4 +12,7 @@ systemctl disable --now ssh || true
 iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
 docker build -t home-agents/workspace-cli:latest ../../workspaces/cli
 docker build -t home-agents/workspace-desktop:latest ../../workspaces/desktop
+docker build -t home-agents/service:latest ../..     # the screen relay runs from the service image
 docker compose up -d
+# Screen relay (live view and take over): tailnet only, HTTPS with the tailnet certificate.
+tailscale serve --bg --https=8710 http://127.0.0.1:8710
