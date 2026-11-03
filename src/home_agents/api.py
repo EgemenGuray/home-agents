@@ -25,6 +25,7 @@ from .localllm import LocalModel
 from .memory import Memory
 from .models import Spend, SpendExceeded
 from .rooms import RoomContext
+from .screen_api import screen_key_from_env
 from .settings import Settings
 from .tools import HomeAssistant, ToolRegistry, memory_tools
 
@@ -55,7 +56,8 @@ class FactIn(BaseModel):
 
 
 def build_app(settings: Settings | None = None, client=None, approvals: Approvals | None = None,
-              harness_config: dict | None = None, providers=None, start_workers: bool = True) -> FastAPI:
+              harness_config: dict | None = None, providers=None, start_workers: bool = True,
+              screens=None) -> FastAPI:
     settings = settings or Settings()
     conn = connect(settings.db_path)
     audit = AuditLog(conn)
@@ -186,6 +188,18 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
         app.state.harness = harness
         app.state.pairing = pairing
 
+    # Screen share and take over (S1.6.1): on when the relay's signing key is set.
+    from . import screen_api
+    if screens is None and (key := screen_key_from_env()):
+        from .takeover import Takeover
+        notify_service = approval_cfg.get("notify_service", "notify.owner_phone")
+        screens = Takeover(key, audit=audit, **screen_api.harness_hooks(getattr(app.state, "harness", None)),
+                           notify=lambda title, text: ha and _service(ha, notify_service, {"title": title, "message": text}))
+    if screens is not None:
+        screen_api.mount(app, screens, auth, settings.screen_relay_url)
+        if start_workers:  # pragma: no cover
+            app.state.screen_sweeper = screen_api.start_sweeper(screens)
+
     @app.get("/metrics", dependencies=[Depends(auth)])
     def metrics():
         from fastapi.responses import PlainTextResponse
@@ -198,6 +212,7 @@ def build_app(settings: Settings | None = None, client=None, approvals: Approval
     app.state.ha = ha
     app.state.approvals = approvals
     app.state.broker = broker
+    app.state.screens = screens
     return app
 
 

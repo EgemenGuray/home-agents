@@ -16,6 +16,7 @@ The agent side of the system (roadmap **Phase 1** E1.1 to E1.11, **Phase 2** E2.
 | `bus.py`, `policy.py` | Agent-to-agent messages only between allowed pairs; blocks are logged | S1.5.2, S1.5.3 |
 | `orchestrator.py` | Plans subtasks (Opus, structured output), checks each route, starts workspaces, kill, spin-off budget | S1.5.1, S1.6.3, S2.5.1 |
 | `workspaces.py` | Docker workspaces on an internal network behind the egress gateway; Tart macOS VMs (max 2) | S1.4.3, S1.3.4, S2.5.2 |
+| `takeover.py`, `screen_relay.py`, `screen_api.py` | Screen share and take over: watch an agent's desktop from the app or `/screen`, touch to take over (the task pauses between steps), hand back with a note of what you did; one driver at a time, short-lived signed tickets, and a relay on the workspace host that drops your input unless you hold control | S1.6.1 |
 | `egress.py` | A job refuses to start unless the route's exit country (and IP) match | S1.3.5 |
 | `guardrails.py`, `gmail_guard.py` | Purchase caps in CAD, gift cards/crypto/transfers blocked; agents never see security emails | S1.8.3 |
 | `audit.py` | Searchable audit log with secret redaction, 30-day retention | S1.8.1 |
@@ -38,6 +39,7 @@ There are two setups. In both, the vault, the credential broker and the egress r
 | Workspaces | Rented Linux VM on the tailnet: `deploy/workspace-host/` (egress gateway, Langfuse, images in `workspaces/`). Linux only, no macOS VMs | Studio: Docker workspaces and up to 2 Tart macOS VMs; the rented VM is cancelled after a week of both running |
 | Models | Cloud only. Private requests fail instead of falling back to the cloud, because there is no local model | Cloud plus the local MLX model (`deploy/studio/launchd/`); private requests stay local |
 | Voice | HA Assist on the hub Mac | Voice server on the Studio (LiveKit, Whisper, Piper); HA Assist on the hub Mac is the fallback |
+| Screen relay (live view and take over) | On the rented VM next to the Linux desktops (`deploy/workspace-host/`), port 8710 on the tailnet; `SCREEN_RELAY_URL` on the hub Mac points there | On the Studio (`deploy/studio/compose.yaml`) for its Docker desktops. macOS VMs are not on the relay yet (Tart's VNC needs a password); use Screen Sharing over the tailnet for those |
 | Web search for the harness | Claude's built-in search only | SearXNG in `deploy/studio/compose.yaml` for any model |
 | Harness memory (Postgres + pgvector) | `memory-db` on the hub Mac; small local embedding model; nightly sleep may use cloud models for non-private memories | `memory-db` on the Studio; embeddings and the nightly sleep run on local models |
 | Deploy | `deploy/deploy.sh <tag>` on the hub Mac | `deploy/deploy.sh <tag>` on the Studio |
@@ -46,13 +48,13 @@ Install, Mac mini only:
 
 1. home-infra first (hub Mac baseline, vault, `services/egress/`).
 2. On the hub Mac, in `deploy/hub/`: copy `.env.example` to `.env` (including `MEMORY_DB_PASSWORD`), copy `config/policy.example.yaml` to `policy.yaml`, put the phone's public key in `keys/`, and create `config/harness.yaml` (`docs/harness.md`). Then run `deploy/deploy.sh <tag>` and `tailscale serve` port 8700.
-3. Rent the workspace VM (16 to 32 GB, Ubuntu 24.04). In `deploy/workspace-host/` copy `.env.example` to `.env`, set `HUB_TAILNET_HOST`, then run `sudo ./setup.sh`. It joins the tailnet and blocks all inbound traffic.
+3. Rent the workspace VM (16 to 32 GB, Ubuntu 24.04). In `deploy/workspace-host/` copy `.env.example` to `.env`, set `HUB_TAILNET_HOST` and `HOME_AGENTS_SCREEN_KEY` (the same value as on the hub Mac, from `openssl rand -hex 32`), then run `sudo ./setup.sh`. It joins the tailnet, blocks all inbound traffic and serves the screen relay on the tailnet only. Set `SCREEN_RELAY_URL` on the hub Mac to the VM's tailnet name, port 8710.
 
 Install, Mac mini + Mac Studio:
 
 1. Everything above, so the agents work before the Studio arrives.
 2. home-infra `docs/studio-checklist.md` on the Studio.
-3. On the Studio: `deploy/studio/.env` (same keys as the hub Mac's, plus the Studio ones), the MLX launchd job, then `docker compose -f deploy/studio/compose.yaml up -d`.
+3. On the Studio: `deploy/studio/.env` (same keys as the hub Mac's, plus the Studio ones), the MLX launchd job, then `docker compose -f deploy/studio/compose.yaml up -d` and `tailscale serve --bg --https=8710 http://127.0.0.1:8710` for the screen relay; point `SCREEN_RELAY_URL` at the Studio.
 4. Run both for a week, then stop the agent on the hub Mac and cancel the rented VM (`docs/phase-2.md`).
 
 Agent code changes only by pull request (`docs/code-changes.md`); protected paths are listed in `PROTECTED_PATHS` and enforced by CI and CODEOWNERS. What's ready versus what needs the Studio is in `docs/phase-2.md`.

@@ -59,6 +59,9 @@ class DockerWorkspaces:
             cap_add=["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"],
             security_opt=["no-new-privileges"],
             shm_size="1g" if kind == "desktop" else "64m",
+            # The desktop's VNC listens only on a Unix socket in this per-workspace volume; the screen relay
+            # on this host is the one way in (screen_relay.py), so other workspaces can't see this screen.
+            volumes={f"screen-{name}": {"bind": "/run/screen", "mode": "rw"}} if kind == "desktop" else None,
         )
         if self.audit:
             self.audit.record("workspace_created", "orchestrator", {"workspace": name, "kind": kind, "route": route}, job_id)
@@ -75,6 +78,10 @@ class DockerWorkspaces:
         except Exception:
             return
         c.remove(force=True)
+        try:
+            self.docker.volumes.get(f"screen-{name}").remove(force=True)
+        except Exception:
+            pass
         if self.audit:
             self.audit.record("workspace_destroyed", "orchestrator", {"workspace": name}, None)
 
@@ -124,12 +131,16 @@ class TartWorkspaces:  # pragma: no cover - needs a Mac with Tart (Phase 2, S2.5
         subprocess.run([self.tart, "delete", name], check=False)
 
 
-class WorkspaceRouter:
-    """Sends each workspace kind to the host that runs it."""
+SCREEN_KINDS = ("desktop", "macos")
 
-    def __init__(self, linux, macos=None):
+
+class WorkspaceRouter:
+    """Sends each workspace kind to the host that runs it, and registers desktops for screen share."""
+
+    def __init__(self, linux, macos=None, screens=None):
         self.linux = linux
         self.macos = macos
+        self.screens = screens  # takeover.Takeover, when the screen relay is set up
         self._owner: dict[str, object] = {}
 
     def create(self, *, job_id: str, kind: str, route: str) -> str:
@@ -138,8 +149,12 @@ class WorkspaceRouter:
             raise RuntimeError(f"no host for {kind} workspaces yet")
         name = host.create(job_id=job_id, kind=kind, route=route)
         self._owner[name] = host
+        if self.screens is not None and kind in SCREEN_KINDS:
+            self.screens.attach(name, job_id)
         return name
 
     def destroy(self, name: str) -> None:
         host = self._owner.pop(name, None) or self.linux
         host.destroy(name)
+        if self.screens is not None:
+            self.screens.detach(name)

@@ -8,6 +8,8 @@ src/home_agents/gmail_guard.py
 src/home_agents/harness/loop.py
 src/home_agents/harness/profiles.py
 src/home_agents/harness/router.py
+src/home_agents/takeover.py
+src/home_agents/screen_relay.py
 config/
 deploy/
 .github/
