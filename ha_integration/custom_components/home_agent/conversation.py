@@ -23,7 +23,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_LOCAL_FIRST, CONF_TOKEN, CONF_URL
-from .logic import TOO_SLOW, UNREACHABLE, device_row, house_devices, keep_listening, local_handled, timeout_for
+from .logic import MUSIC_LABEL, TOO_SLOW, UNREACHABLE, device_row, house_devices, keep_listening, local_handled, timeout_for
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -64,7 +64,8 @@ class HomeAgentEntity(conversation.ConversationEntity):
             rows.append(device_row(
                 state.entity_id, state.name, entry.area_id if entry else None, device.area_id if device else None,
                 aliases=entry.aliases if entry else (), members=state.attributes.get("entity_id"),
-                here=bool(device_id and device and device.id == device_id)))
+                here=bool(device_id and device and device.id == device_id),
+                music=bool(entry and MUSIC_LABEL in entry.labels)))
         return house_devices(rows, room)
 
     async def _local(self, user_input: conversation.ConversationInput) -> conversation.ConversationResult | None:
