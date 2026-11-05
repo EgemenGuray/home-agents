@@ -28,10 +28,11 @@ def keep_listening(text: str) -> bool:
 # Room awareness: the agent gets the exposed devices with their rooms, so "turn off the TV" said in the
 # bedroom means the bedroom TV (home_agents/rooms.py). Capped so a big house doesn't bloat every request.
 MAX_DEVICES = 300
+MUSIC_LABEL = "music"  # HA label id on each room's music speaker
 
 
 def device_row(entity_id: str, name: str, entity_area: str | None, device_area: str | None,
-               aliases=(), members=None, here: bool = False) -> dict:
+               aliases=(), members=None, here: bool = False, music: bool = False) -> dict:
     """One exposed entity for the agent. The entity's own area wins over its device's, as in HA."""
     row = {"entity_id": entity_id, "name": name, "area": entity_area or device_area}
     if aliases:
@@ -40,6 +41,8 @@ def device_row(entity_id: str, name: str, entity_area: str | None, device_area: 
         row["members"] = [str(m) for m in members]
     if here:
         row["here"] = True
+    if music:  # labelled `music`: this room's music speaker (home-assistant-config packages/music.yaml)
+        row["music"] = True
     return row
 
 

@@ -10,7 +10,7 @@ The agent side of the system (roadmap **Phase 1** E1.1 to E1.11, **Phase 2** E2.
 | `models.py` | Haiku for routing, Sonnet by default, Opus for planning; spend in CAD with a monthly hard cap; private requests to the local model | S1.1.2, S1.8.2, S2.3.2 |
 | `memory.py`, `db.py` | Household facts ("what do you know about me", "forget that") and shared conversation history | S1.1.3 |
 | `tools.py` | Home Assistant tools through a scoped user; locks and garage doors need approval | S1.2.1, S0.5.9 |
-| `rooms.py` | Room awareness like Alexa rooms: the HA integration sends the speaker's room and the exposed devices with their rooms and groups; a device command with no target acts on this room only (`docs/rooms.md`) | S0.3.5, E1.1 |
+| `rooms.py` | Room awareness like Alexa rooms: the HA integration sends the speaker's room and the exposed devices with their rooms and groups; a device command with no target acts on this room only, and "play music" on this room's music speaker (`docs/rooms.md`) | S0.3.5, E1.1 |
 | `approvals.py` | Requests signed by a P-256 key in the phone's Secure Enclave; nonce, expiry, single use | S1.6.2 |
 | `broker.py` | Login release: phone seals the login to the workspace's one-time key; broker relays ciphertext once | E1.7 |
 | `bus.py`, `policy.py` | Agent-to-agent messages only between allowed pairs; blocks are logged | S1.5.2, S1.5.3 |
